@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/cocklebur-logo.png" alt="Cocklebur" width="120">
+</p>
+
 # Cocklebur
 
 **A lightweight, portable project workspace. Land local. Pack it all up when you're done.**
@@ -64,6 +68,16 @@ docker compose up -d --build
 ```
 
 The supplied Docker configuration is intended to sit behind HTTPS through your own reverse proxy or tunnel. Do not expose the app's plain HTTP port directly to the public internet.
+
+## Screenshots
+
+### Projects
+
+![Cocklebur Projects](assets/screenshot-projects.png)
+
+### Add New Project
+
+![Cocklebur Dashboard](assets/screenshot-newproject.png)
 
 ## What Cocklebur includes
 
