@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/cocklebur-logo.png" alt="Cocklebur" width="120">
+  <img src="assets/icon-source.png" alt="Cocklebur" width="120">
 </p>
 
 # Cocklebur
