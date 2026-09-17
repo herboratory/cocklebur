@@ -98,7 +98,14 @@ Cocklebur is a **Herboratory** project.
 
 If Cocklebur is useful to you, you can support the continued development of Herboratory projects on Buy Me a Coffee:
 
-[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-herboratory-FFDD00?style=flat-square&logo=buymeacoffee&logoColor=000000)](https://buymeacoffee.com/herboratory)
+<a href="https://www.buymeacoffee.com/herboratory">
+  <img
+    src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png"
+    alt="Buy Me a Coffee"
+    height="60"
+    width="217"
+  >
+</a>
 
 ## License
 
