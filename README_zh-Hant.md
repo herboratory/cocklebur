@@ -98,7 +98,14 @@ Cocklebur 是 **Herboratory** 的專案。
 
 如果 Cocklebur 對你有幫助，可以透過 Buy Me a Coffee 支持 Herboratory 持續開發與維護各個專案：
 
-**https://buymeacoffee.com/herboratory**
+<a href="https://www.buymeacoffee.com/herboratory">
+  <img
+    src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png"
+    alt="Buy Me a Coffee"
+    height="60"
+    width="217"
+  >
+</a>
 
 ## License
 
