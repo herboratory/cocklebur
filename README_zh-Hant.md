@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/icon-source.png" alt="Cocklebur" width="120">
+</p>
+
 # Cocklebur
 
 **輕量、可攜的專案工作空間。Local 落地，結束時整包帶走。**
@@ -64,6 +68,16 @@ docker compose up -d --build
 ```
 
 Server 版預期放在你自己的 HTTPS reverse proxy 或 tunnel 後方。不要把 Cocklebur 的 plain HTTP port 直接暴露到公網。
+
+## Screenshots
+
+### 專案頁面
+
+![Cocklebur Projects](assets/screenshot-projects.png)
+
+### 新增專案
+
+![Cocklebur Dashboard](assets/screenshot-newproject.png)
 
 ## 主要功能
 
