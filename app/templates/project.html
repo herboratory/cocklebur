@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{{ project.name }} — Cocklebur</title>
+  <link rel="stylesheet" href="/static/app.css?v={{ version }}">
+</head>
+<body data-page="project" data-project-id="{{ project.id }}" data-project-mode="{{ project.mode }}">
+  <header class="topbar">
+    <nav class="topnav nav-scroll" id="projectTopnav" aria-label="Cocklebur navigation">
+      <a class="nav-icon-button" href="/" aria-label="Projects" data-tooltip="Projects">
+        <span class="nav-asset nav-projects" aria-hidden="true"></span>
+      </a>
+      <button class="nav-icon-button active" data-tab="overview" aria-label="Dashboard" data-tooltip="Dashboard"><span class="nav-asset nav-dashboard" aria-hidden="true"></span></button>
+      <button class="nav-icon-button" data-tab="announcements" aria-label="Announcements" data-tooltip="Announcements"><span class="nav-asset nav-announcements" aria-hidden="true"></span><b id="annUnread" class="nav-badge"></b></button>
+      <button class="nav-icon-button" data-tab="cards" aria-label="Cards" data-tooltip="Cards"><span class="nav-asset nav-cards" aria-hidden="true"></span><b id="cardsUnread" class="nav-badge"></b></button>
+      <button class="nav-icon-button" data-tab="discussion" aria-label="Discussions" data-tooltip="Discussions"><span class="nav-asset nav-discussion" aria-hidden="true"></span><b id="discussionUnread" class="nav-badge"></b></button>
+      <button class="nav-icon-button" data-tab="files" aria-label="Files" data-tooltip="Files"><span class="nav-asset nav-files" aria-hidden="true"></span><b id="filesUnread" class="nav-badge"></b></button>
+      <button class="nav-icon-button" data-tab="people" aria-label="Members" data-tooltip="Members"><span class="nav-asset nav-members" aria-hidden="true"></span></button>
+      <button class="nav-icon-button" data-tab="settings" aria-label="Settings" data-tooltip="Settings"><span class="nav-asset nav-settings" aria-hidden="true"></span></button>
+    </nav>
+  </header>
+
+  <main class="page-shell project-shell">
+    <div id="globalBanner"></div>
+
+    <section class="tab-panel active" data-panel="overview">
+      <div class="page-intro dashboard-intro">
+        <div><p class="eyebrow">DASHBOARD</p><h1 id="projectName">{{ project.name }}</h1><p id="projectDescription" class="subtitle"></p></div>
+        <button class="btn secondary writable" id="exportTopBtn">Export snapshot</button>
+      </div>
+      <div id="expiryBanner"></div>
+      <div class="dashboard-grid">
+        <section class="dashboard-panel dashboard-announcements">
+          <div class="panel-heading"><div><span class="section-kicker">ANNOUNCEMENTS</span><h2>Latest updates</h2></div><button class="text-link" data-go="announcements">View all</button></div>
+          <div id="overviewAnnouncements" class="mini-timeline"></div>
+        </section>
+        <section class="dashboard-panel">
+          <div class="panel-heading"><div><span class="section-kicker">TO-DO</span><h2>Top three</h2></div><button class="text-link" data-go="cards">View all</button></div>
+          <div id="overviewTodos" class="dashboard-accordion-list"></div>
+        </section>
+        <section class="dashboard-panel">
+          <div class="panel-heading"><div><span class="section-kicker">EVENTS</span><h2>Coming up</h2></div><button class="text-link" data-go="cards">View all</button></div>
+          <div id="overviewEvents" class="dashboard-accordion-list"></div>
+        </section>
+        <section class="dashboard-panel">
+          <div class="panel-heading"><div><span class="section-kicker">DISCUSSION</span><h2>Recent threads</h2></div><button class="text-link" data-go="discussion">View all</button></div>
+          <div id="overviewDiscussions" class="dashboard-thread-list"></div>
+        </section>
+      </div>
+      <section class="dashboard-activity">
+        <div class="panel-heading"><div><span class="section-kicker">ACTIVITY</span><h2>Recent activity</h2></div><button class="text-link" data-settings-tab="activities">View all</button></div>
+        <div id="recentActivity" class="activity-list"></div>
+      </section>
+    </section>
+
+    <section class="tab-panel" data-panel="announcements">
+      <div class="page-intro compact-intro"><div><p class="eyebrow">NOTICEBOARD</p><h1>Announcements</h1><p class="subtitle">Important updates, kept visible and easy to revisit.</p></div></div>
+      <div class="announcement-timeline-wrap">
+        <div class="announcement-timeline" id="announcementsList">
+          <button class="announcement-add writable" id="newAnnouncementBtn"><span class="timeline-dot"></span><span>+ Add new announcement</span></button>
+        </div>
+      </div>
+    </section>
+
+    <section class="tab-panel" data-panel="cards">
+      <div class="page-intro compact-intro"><div><p class="eyebrow">WORK</p><h1>Cards</h1><p class="subtitle">To-dos and events in one calm, searchable place.</p></div></div>
+      <div class="search-filter-shell" id="cardSearchShell">
+        <div class="search-filter-row">
+          <span class="search-icon"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg></span>
+          <input id="cardSearch" type="search" placeholder="Search cards">
+          <button class="filter-toggle" type="button" data-filter-toggle="cardFilterPanel"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M8 14v6"/></svg><span>Filters</span></button>
+        </div>
+        <div class="filter-panel" id="cardFilterPanel" hidden>
+          <div class="filter-grid">
+            <details class="filter-dropdown"><summary>Type</summary><div class="dropdown-checks"><label class="check-row"><input type="checkbox" name="card_type" value="task"> To-do</label><label class="check-row"><input type="checkbox" name="card_type" value="event"> Event</label></div></details>
+            <details class="filter-dropdown"><summary>Status</summary><div class="dropdown-checks"><label class="check-row"><input type="checkbox" name="card_status" value="todo"> Pending</label><label class="check-row"><input type="checkbox" name="card_status" value="doing"> In Progress</label><label class="check-row"><input type="checkbox" name="card_status" value="scheduled"> Scheduled</label><label class="check-row"><input type="checkbox" name="card_status" value="done"> Done</label><label class="check-row"><input type="checkbox" name="card_status" value="archived"> Archived</label></div></details>
+            <details class="filter-dropdown"><summary>Assignees</summary><div id="cardAssigneeChecks" class="dropdown-checks check-stack"></div></details>
+          </div>
+        </div>
+      </div>
+      <div class="content-tabs" role="tablist"><button class="active" data-card-scope="active">Active</button><button data-card-scope="archive">Archive</button></div>
+      <div id="cardsView" class="card-grid uniform-card-grid"></div>
+    </section>
+
+    <section class="tab-panel" data-panel="discussion">
+      <div class="page-intro compact-intro"><div><p class="eyebrow">CONVERSATION</p><h1>Discussion</h1><p class="subtitle">Threads stay organized by channel, so decisions remain findable.</p></div><button class="btn owner-only" id="newChannelBtn">New channel</button></div>
+      <div class="channel-layout">
+        <aside id="channelList" class="channel-list"></aside>
+        <div class="discussion-main">
+          <div class="discussion-channel-head"><div class="channel-name-row"><strong id="currentChannelName"># general</strong><span id="currentChannelCount" class="count-badge"></span></div><button class="btn compact owner-only" id="manageChannelBtn">Manage channel</button></div>
+          <div class="search-filter-shell compact-search-shell">
+            <div class="search-filter-row"><span class="search-icon"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg></span><input id="discussionSearch" type="search" placeholder="Search discussions"><button class="filter-toggle" type="button" data-filter-toggle="discussionFilterPanel"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M8 14v6"/></svg><span>Filters</span></button></div>
+            <div class="filter-panel" id="discussionFilterPanel" hidden><div class="filter-grid"><details class="filter-dropdown"><summary>Author</summary><div id="discussionAuthorChecks" class="dropdown-checks check-stack"></div></details><details class="filter-dropdown"><summary>Tags</summary><div id="discussionTagFilter" class="dropdown-checks check-stack"></div></details></div></div>
+          </div>
+          <div class="discussion-actions"><button class="btn writable" id="newThreadBtn">New discussion</button></div>
+          <div id="threadsList" class="thread-accordion-list"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="tab-panel" data-panel="files">
+      <div class="page-intro compact-intro"><div><p class="eyebrow">ARTIFACTS</p><h1>Files</h1><p class="subtitle">Shared files stay with the project when you pack it up.</p></div></div>
+      <div class="file-toolbar">
+        <div class="search-filter-shell compact-search-shell grow">
+          <div class="search-filter-row"><span class="search-icon"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg></span><input id="fileSearch" type="search" placeholder="Search files"><button class="filter-toggle" type="button" data-filter-toggle="fileFilterPanel"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M8 14v6"/></svg><span>Filters</span></button></div>
+          <div class="filter-panel" id="fileFilterPanel" hidden><div class="filter-grid"><details class="filter-dropdown"><summary>Uploaded by</summary><div id="fileUploaderChecks" class="dropdown-checks check-stack"></div></details><details class="filter-dropdown"><summary>Type</summary><div id="fileTypeChecks" class="dropdown-checks check-stack"></div></details></div></div>
+        </div>
+        <button class="btn writable" id="uploadFileBtn">Upload file</button><input id="fileInput" type="file" hidden multiple>
+      </div>
+      <div class="bulk-bar" id="fileBulkBar" hidden><span id="fileSelectedCount">0 selected</span><button class="text-link danger-text writable" id="bulkDeleteFiles">Delete selected</button></div>
+      <div class="file-table-head"><span></span><span>Filename</span><span>Uploaded</span><span>By</span><span>Size</span><span></span></div>
+      <div id="filesList" class="file-list"></div>
+    </section>
+
+    <section class="tab-panel" data-panel="people">
+      <div class="page-intro compact-intro"><div><p class="eyebrow" id="peopleEyebrow">TEAM</p><h1 id="peopleTitle">Members</h1><p class="subtitle" id="peopleSubtitle">Invite people, assign roles, and keep ownership clear.</p></div><button class="btn owner-only server-only" id="inviteBtn">Invite member</button></div>
+      <div id="invitePanel"></div><div id="peopleList" class="people-list"></div>
+    </section>
+
+    <section class="tab-panel" data-panel="settings">
+      <div class="page-intro compact-intro"><div><p class="eyebrow">PROJECT CONTROL</p><h1>Settings</h1><p class="subtitle">Project details, storage, lifecycle, and system activity.</p></div></div>
+      <div class="settings-tabs"><button class="active" data-settings-tab="general">General</button><button data-settings-tab="activities">Activities</button></div>
+      <div class="settings-panel active" data-settings-panel="general">
+        <div class="settings-grid">
+          <section class="panel owner-only"><h2>Project details</h2><form id="projectSettingsForm" class="form-stack"><label>Name<input name="name"></label><label>Description<textarea name="description" rows="4"></textarea></label><label>Expected end date <span class="optional">Optional</span><input name="expiry" type="date"></label><button class="btn" type="submit">Save details</button></form></section>
+          <section class="panel owner-only"><h2>Storage & access</h2><div id="storageLocationBlock" class="storage-location" hidden><span class="field-label">Current project folder</span><div class="copy-row path-row"><code id="storagePathValue"></code><button class="btn compact inline-icon-btn" type="button" id="copyStoragePath"><svg viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg><span>Copy path</span></button></div><p class="microcopy">The storage location is fixed after creation. Move it safely with Export → Import.</p></div><form id="storageSettingsForm" class="form-stack"><label>Project quota (MB)<input name="quota_mb" type="number" min="10"></label><label>Optional join PIN<input name="pin" type="text" maxlength="20" placeholder="Leave blank for none"></label><button class="btn" type="submit">Save settings</button></form></section>
+          <section class="panel"><h2>Backup project</h2><p>Download a self-contained project pack with data, readable text, and original files.</p><button class="btn writable" id="exportSettingsBtn">Export current state</button></section>
+          <section class="panel lifecycle-panel owner-only"><h2>Archive project</h2><p>Keep the project on this instance, but move it out of active work.</p><button class="btn secondary" id="archiveSettingsBtn">Archive project</button></section>
+          <section class="panel danger-panel owner-only"><h2>Delete project</h2><p>Permanent deletion is only allowed after a current export exists.</p><button class="btn danger" id="closeProjectBtn">Review & delete</button></section>
+        </div>
+      </div>
+      <div class="settings-panel" data-settings-panel="activities"><div id="activityList" class="activity-list settings-activity-list"></div></div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="footer-spacer"></div>
+    <div class="footer-brand"><div class="footer-brand-line"><img src="/static/cocklebur-logo.png" alt=""><strong>Cocklebur</strong></div><span>LAND LOCAL • PACK ALL UP WHEN YOU’RE DONE</span></div>
+    
+  </footer>
+
+  <dialog id="genericDialog" class="modal"><div id="genericDialogContent" class="modal-card"></div></dialog>
+  <div id="toast" class="toast" aria-live="polite"></div>
+  <script>window.PW_PROJECT={{ project.id|tojson }};</script>
+  <script src="/static/app.js?v={{ version }}"></script>
+</body>
+</html>

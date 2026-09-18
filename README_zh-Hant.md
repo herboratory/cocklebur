@@ -1,130 +1,82 @@
-<p align="center">
-  <img src="assets/icon-source.png" alt="Cocklebur" width="120">
-</p>
+# Cocklebur Server
 
-# Cocklebur
+**版本：** `0.2.16`  
+**Project pack format：** `1.0`
 
-**輕量、可攜的專案工作空間。Local 落地，結束時整包帶走。**
+Cocklebur Server 是一個輕量、self-hosted 的專案工作空間：一個 project 維持一份 canonical live copy，專案結束後可以把整包資料 export 帶走。
 
-Cocklebur 是以「專案」為核心的輕量工作空間。你可以在 macOS 本機單人使用，也可以自行部署 Server 版讓小型團隊共同使用同一份 canonical project。專案結束後，可以把整個工作空間匯出成可攜式 project pack。
+這個 archive 是 **Server distribution**，不包含 Desktop build tooling。
 
-**目前版本：
-- macOS Desktop: 0.2.15
-- Self-hosted Server: 0.2.16
+## 核心模型
 
-[English](README.md)
+- 每個 active project 一份 canonical server copy。
+- JSON / JSONL + 原始 files 作為資料本體。
+- 不做 CRDT、offline multi-master sync 或偷偷 merge。
+- Stale write 回 HTTP `409`。
+- Export 同時包含 machine-readable data、human-readable text 與原始 files。
+- Server 必須只跑 **一個 application worker**。
 
-## 下載
-
-預先建置好的版本都放在 [GitHub Releases](https://github.com/herboratory/cocklebur/releases/latest)：
-
-- **macOS Desktop** — 下載 `.dmg`
-- **Self-hosted Server** — 下載 Server `.zip`
-
-這個 repository 本身刻意保持精簡，主要作為 Cocklebur 的公開下載入口、說明、issue 回報與專案資訊頁。
-
-## macOS Desktop
-
-Cocklebur Desktop 是 local-only、單人使用版本。除非你主動匯出，project data 都留在你的 Mac 上。
-
-### macOS 第一次開啟
-
-目前 macOS 版本**尚未使用 Apple Developer ID 簽署，也未 notarize**，所以第一次開啟時 macOS 可能會阻擋。
-
-1. 先嘗試開啟 Cocklebur 一次。
-2. 打開 **System Settings → Privacy & Security**。
-3. 往下找到 Cocklebur，按 **Open Anyway**。
-4. 再確認 **Open**。
-
-通常每一份 app 只需要做一次。
-
-如果 macOS 顯示 app damaged，請先確認是從 Cocklebur 官方 GitHub Release 下載，並核對 checksum。若確認檔案正常，進階使用者可移除 quarantine attribute：
-
-```bash
-xattr -cr /Applications/Cocklebur.app
-```
-
-## Self-hosted Server
-
-Server 版適合需要多人共同使用同一份 project workspace 的小型團隊。
-
-下載並解壓 Server package 後：
+## Docker 快速開始
 
 ```bash
 cp .env.example .env
 ```
 
-至少設定：
+本機測試可設定：
 
 ```dotenv
-COCKLEBUR_HOST_KEY=請換成足夠長的隨機密鑰
 POPUP_APP_MODE=server
 POPUP_DATA_DIR=/data
-POPUP_BASE_URL=https://你的-cocklebur-網址
+POPUP_HOST_PORT=8000
+POPUP_BASE_URL=http://127.0.0.1:8000
+COCKLEBUR_BOOTSTRAP_KEY=換成一個夠長的隨機 secret
 ```
 
-然後啟動：
+舊的 `COCKLEBUR_HOST_KEY` 名稱仍相容，會被當成 bootstrap key。
+
+啟動：
 
 ```bash
 docker compose up -d --build
+curl http://127.0.0.1:8000/health
 ```
 
-Server 版預期放在你自己的 HTTPS reverse proxy 或 tunnel 後方。不要把 Cocklebur 的 plain HTTP port 直接暴露到公網。
+## 權限模型
 
-## Screenshots
+Cocklebur 把 infrastructure、instance 與 project 三個層級分開：
 
-### 專案頁面
+- **Infrastructure Admin / Deployer**：管理主機、Docker、storage、backup、network；這不是 Cocklebur app role。
+- **Host**：管理整個 Cocklebur instance。
+- **Owner**：管理某一個 project。
+- **Member**：一般 project 協作。
+- **Viewer**：project content 唯讀，但可改自己的 display name。
 
-![Cocklebur Projects](assets/screenshot-projects.png)
+另外，某個既有 project identity 可以被 Host 額外授權：
 
-### 新增專案
+- **Create projects**：可建立新 project；建立後自動成為該 project Owner。
+- **Import project packs**：可 import project pack；成功後取得 imported project 的 Owner access。
 
-![Cocklebur Dashboard](assets/screenshot-newproject.png)
+Owner / Member / Viewer 本身不會自動得到 Create / Import。
+
+### Host bootstrap 與 recovery
+
+`COCKLEBUR_BOOTSTRAP_KEY` 是一次性的 bootstrap credential。指定的 Host 第一次在 Projects 頁按 **Claim Host**，輸入 bootstrap key 後，Cocklebur 會把真正的 Host state 寫進 persistent `/data`，並顯示 Host recovery code。
+
+完成 claim 後，bootstrap key **不再是 Host 登入密碼**。新的 browser 必須用目前的 Host recovery code；成功 recovery 後舊 Host browser session 不會被踢掉，但 recovery code 會 rotate。
+
+Infrastructure Admin 仍然掌握底層 server/storage，因此技術上始終能讀、改、刪 self-hosted data。Cocklebur 的 app 權限不會假裝能限制 server root/admin。
 
 ## 主要功能
 
-- Projects 與 optional expected end date
-- Dashboard
-- Announcements
+- Projects + expected end date
+- Dashboard / announcements
 - To-do / Event Cards
-- Checklist、tag、assignee
-- Discussion channels 與有標題的 threads
+- Checklist、tags、assignees、visibility、edit access
+- Discussion channels + titled threads
 - Project files
-- Server mode 的 Owner / Member / Viewer
-- Invitation / recovery links
-- Activity history
-- Project export / import
-- Human-readable + machine-readable portable project packs
+- Owner / Member / Viewer
+- Invitation / recovery
+- Instance-level Create / Import delegation
+- Portable project export / import
 
-Cocklebur 刻意不做 offline multi-master sync，也不做 Google Docs 式即時多人共同編輯。同一個 project 永遠以一份 canonical active copy 為準。
-
-## Portable by design
-
-Project 可以完整匯出，內容包括 structured project data、human-readable material、checksums 與原始 files；之後可以重新匯入 Cocklebur。
-
-## Privacy
-
-Cocklebur 是 local / self-hosted 軟體。Herboratory 不提供中央 Cocklebur project-data service。
-
-但 self-hosting 仍代表機器或 server 管理者能直接存取底層檔案；app 裡的 visibility control 並不是 filesystem encryption。
-
-## 支持開發
-
-Cocklebur 是 **Herboratory** 的專案。
-
-如果 Cocklebur 對你有幫助，可以透過 Buy Me a Coffee 支持 Herboratory 持續開發與維護各個專案：
-
-<a href="https://www.buymeacoffee.com/herboratory">
-  <img
-    src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png"
-    alt="Buy Me a Coffee"
-    height="60"
-    width="217"
-  >
-</a>
-
-## License
-
-Cocklebur 採用 **PolyForm Noncommercial License 1.0.0**。目前不授予商業使用權。
-
-詳見 [LICENSE](LICENSE)。
+公開到 Internet 時請使用 HTTPS、保留 persistent volume、只跑一個 worker，並保護 bootstrap/recovery credential、invite links 與 Owner recovery codes。

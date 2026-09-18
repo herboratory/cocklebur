@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Cocklebur</title>
+  <link rel="stylesheet" href="/static/app.css?v={{ version }}">
+</head>
+<body data-page="home" data-mode="{{ mode }}">
+  <header class="topbar">
+    <nav class="topnav nav-scroll" aria-label="Cocklebur navigation">
+      <a class="nav-icon-button active" href="/" aria-label="Projects" data-tooltip="Projects"><span class="nav-asset nav-projects" aria-hidden="true"></span></a>
+      <button class="nav-icon-button" disabled aria-label="Dashboard" data-tooltip="Dashboard"><span class="nav-asset nav-dashboard" aria-hidden="true"></span></button>
+      <button class="nav-icon-button" disabled aria-label="Announcements" data-tooltip="Announcements"><span class="nav-asset nav-announcements" aria-hidden="true"></span></button>
+      <button class="nav-icon-button" disabled aria-label="Cards" data-tooltip="Cards"><span class="nav-asset nav-cards" aria-hidden="true"></span></button>
+      <button class="nav-icon-button" disabled aria-label="Discussions" data-tooltip="Discussions"><span class="nav-asset nav-discussion" aria-hidden="true"></span></button>
+      <button class="nav-icon-button" disabled aria-label="Files" data-tooltip="Files"><span class="nav-asset nav-files" aria-hidden="true"></span></button>
+      <button class="nav-icon-button" disabled aria-label="Members" data-tooltip="Members"><span class="nav-asset nav-members" aria-hidden="true"></span></button>
+      <button class="nav-icon-button" disabled aria-label="Settings" data-tooltip="Settings"><span class="nav-asset nav-settings" aria-hidden="true"></span></button>
+    </nav>
+  </header>
+
+  <main class="page-shell landing-shell">
+    <section class="page-intro projects-intro">
+      <div>
+        <p class="eyebrow">YOUR PROJECTS</p>
+        <h1>Projects</h1>
+        <p class="subtitle">Small workspaces for things that have a beginning, a middle, and an end.</p>
+      </div>
+      <div class="header-actions">
+        {% if mode == 'server' %}<button class="btn secondary" id="hostAccessBtn">Host access</button><button class="btn secondary host-admin-only" id="instancePermissionsBtn">Instance permissions</button><button class="btn secondary" id="ownerRecoveryBtn">Owner recovery</button>{% endif %}
+        <button class="btn{% if mode == 'server' %} create-permission{% endif %}" id="newProjectBtn">New project</button>
+        <button class="btn secondary{% if mode == 'server' %} import-permission{% endif %}" id="importBtn">Import pack</button>
+        <input id="importFile" type="file" accept=".zip" hidden>
+      </div>
+    </section>
+
+    <section class="notice subtle" id="modeNotice"></section>
+    <section>
+      <div id="projectGrid" class="project-grid"><div class="empty-card">Loading…</div></div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="footer-spacer"></div>
+    <div class="footer-brand">
+      <div class="footer-brand-line"><img src="/static/cocklebur-logo.png" alt=""><strong>Cocklebur</strong></div>
+      <span>LAND LOCAL • PACK ALL UP WHEN YOU’RE DONE</span>
+    </div>
+    
+  </footer>
+
+  <dialog id="projectDialog" class="modal">
+    <form id="projectForm" method="dialog" class="modal-card">
+      <div class="modal-head"><div><p class="eyebrow">NEW PROJECT</p><h2>Create a project</h2><p class="muted">Choose where it lives now. You can export the whole thing later.</p></div><button class="icon-btn project-dialog-cancel" type="button" aria-label="Close">×</button></div>
+      <label><span class="field-label">Project name</span><input name="name" required maxlength="160" placeholder="e.g. Community event"></label>
+      <label><span class="field-label">Description</span><textarea name="description" rows="3" placeholder="What is this project for?"></textarea></label>
+      <div class="two-col project-form-secondary-row">
+        <label><span class="field-label">Who will use it?</span>
+          <select name="mode">{% if mode == 'server' %}<option value="server">Me and other people (Server)</option>{% else %}<option value="local">Only me (Local)</option><option value="server">Shared from this machine (advanced)</option>{% endif %}</select>
+        </label>
+        <label><span class="field-label">Expected end date <span class="optional">(Optional)</span></span><input name="expiry" type="date"></label>
+      </div>
+      <label><span class="field-label">Your display name</span><input name="owner_name" value="Owner" maxlength="100"></label>
+      <div id="customStorageRow" class="storage-config-stack" hidden>
+        <label><span class="field-label">Local storage folder <span class="optional">(Optional)</span></span><div class="copy-row"><input name="storage_path" id="storagePath" readonly placeholder="Use app-managed default"><button type="button" class="btn compact" id="chooseFolderBtn">Choose</button></div></label>
+        <div class="storage-warning"><strong>Choose carefully.</strong><span>This location cannot be changed directly after project creation. Move a project later with Export → Import.</span></div>
+      </div>
+      <div class="modal-actions"><button class="btn secondary project-dialog-cancel" type="button">Cancel</button><button class="btn" type="submit" value="default">Create project</button></div>
+    </form>
+  </dialog>
+  <dialog id="genericDialog" class="modal"><div id="genericDialogContent" class="modal-card"></div></dialog>
+  <div id="toast" class="toast" aria-live="polite"></div>
+  <script src="/static/app.js?v={{ version }}"></script>
+</body>
+</html>
