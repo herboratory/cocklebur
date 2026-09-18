@@ -1,0 +1,41 @@
+# PROD 環境專用覆蓋設定
+global:
+  namespace: cocklebur-app
+
+image:
+  repository: registry.example.com/prod/cocklebur-server
+  tag: 0.2.16
+  pullPolicy: IfNotPresent
+
+persistence:
+  storageClass: standard
+  size: 20Gi
+
+ingress:
+  className: public
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    nginx.ingress.kubernetes.io/client-max-body-size: "50m"
+  hosts:
+    - host: cocklebur.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: cocklebur-tls-prod
+      hosts:
+        - cocklebur.example.com
+
+certificate:
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+  dnsNames:
+    - cocklebur.example.com
+
+caIssuer:
+  enabled: false
+
+config:
+  baseUrl: https://cocklebur.example.com

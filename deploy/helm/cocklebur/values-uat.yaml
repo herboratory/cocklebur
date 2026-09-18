@@ -1,0 +1,42 @@
+# UAT 環境專用覆蓋設定
+global:
+  namespace: cocklebur-app
+
+image:
+  repository: registry.example.com/team/cocklebur-server
+  tag: latest
+  pullPolicy: IfNotPresent
+
+persistence:
+  storageClass: local-path
+  size: 10Gi
+
+ingress:
+  className: public
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web, websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+  hosts:
+    - host: cocklebur-uat.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: cocklebur-tls-uat
+      hosts:
+        - cocklebur-uat.example.com
+
+certificate:
+  issuerRef:
+    name: internal-ca-issuer
+    kind: ClusterIssuer
+  dnsNames:
+    - cocklebur-uat.example.com
+
+caIssuer:
+  enabled: true
+  name: internal-ca-issuer
+  secretName: internal-ca-secret
+
+config:
+  baseUrl: https://cocklebur-uat.example.com
