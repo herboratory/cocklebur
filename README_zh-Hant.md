@@ -8,7 +8,9 @@
 
 Cocklebur 是以「專案」為核心的輕量工作空間。你可以在 macOS 本機單人使用，也可以自行部署 Server 版讓小型團隊共同使用同一份 canonical project。專案結束後，可以把整個工作空間匯出成可攜式 project pack。
 
-**目前版本：** `0.2.15`
+**目前版本：
+- macOS Desktop: 0.2.15
+- Self-hosted Server: 0.2.16
 
 [English](README.md)
 
