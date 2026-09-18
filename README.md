@@ -8,7 +8,9 @@
 
 Cocklebur is a project-first workspace for bounded projects. Use it locally on macOS, or self-host a shared Server edition for a small team. When the project is finished, export the whole workspace as a portable project pack.
 
-**Current release:** `0.2.15`
+Current releases:
+- macOS Desktop: 0.2.15
+- Self-hosted Server: 0.2.16
 
 [繁體中文](README_zh-Hant.md)
 
