@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{ project.name }}</title><link rel="stylesheet" href="/static/app.css?v={{ version }}"></head>
+<body data-page="locked" data-project-id="{{ project.id }}">
+<main class="join-shell"><div class="join-card">
+  <div class="eyebrow">ACCESS REQUIRED</div><h1>{{ project.name }}</h1>
+  <p>This browser does not currently have access to this project.</p>
+  <p>If you are a Member or Viewer, ask an Owner for a one-time recovery link. If you are an Owner and this browser has no project session, you can use the Owner recovery code saved for this project.</p><div class="banner warn"><strong>Do not use Owner recovery on a Member browser.</strong><br>Owner recovery restores the existing Owner identity; it does not promote the current Member.</div>
+  <form id="ownerRecoverLockedForm" class="form-stack">
+    <label>Owner recovery code<input name="code" autocomplete="off" placeholder="XXXXX-XXXXX-XXXXX-XXXXX"></label>
+    <button class="btn" type="submit">Recover Owner access</button>
+  </form>
+  <div style="margin-top:12px"><a class="btn secondary" href="/">Back to projects</a></div>
+</div></main><div id="toast" class="toast"></div><script src="/static/app.js?v={{ version }}"></script></body></html>

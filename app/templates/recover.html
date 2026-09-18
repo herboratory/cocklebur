@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Recover {{ project.name }}</title><link rel="stylesheet" href="/static/app.css?v={{ version }}"></head>
+<body>
+<main class="join-shell"><div class="join-card">
+  <div class="eyebrow">RECOVER ACCESS</div>
+  <h1>{{ project.name }}</h1>
+  {% if error %}<div class="banner danger"><strong>Recovery failed.</strong><br>{{ error }}</div>{% else %}
+  <p>This one-time link has not been used yet. Press the button below to restore this member identity on this browser.</p>
+  <p class="microcopy">Opening or previewing this page does not consume the recovery link. The token is used only after you confirm.</p>
+  <form method="post" action="/recover/{{ project.id }}" class="form-stack">
+    <input type="hidden" name="token" value="{{ token }}">
+    <button class="btn" type="submit">Recover access</button>
+  </form>
+  {% endif %}
+  <div style="margin-top:12px"><a class="btn secondary" href="/">Back to projects</a></div>
+</div></main>
+</body></html>

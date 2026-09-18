@@ -1,0 +1,82 @@
+from __future__ import annotations
+
+import compileall
+import shutil
+import subprocess
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+REQUIRED = [
+    'README.md', 'README_zh-Hant.md', 'DEPLOY_SERVER.md',
+    'USER_GUIDE.md', 'USER_GUIDE_zh-Hant.md', 'BACKUP_RESTORE.md',
+    'UPDATE.md', 'EXPORT_FORMAT.md', 'SECURITY.md', 'LICENSE',
+    'CHANGELOG.md', 'RELEASE.md', 'Dockerfile', 'docker-compose.yml',
+    '.env.example', 'requirements.txt', 'ACCEPTANCE_SERVER_0.2.16_zh-Hant.md',
+    'app/__init__.py', 'app/config.py', 'app/main.py', 'app/models.py',
+    'app/security.py', 'app/storage.py', 'app/rendering.py',
+    'app/static/app.js', 'app/static/app.css', 'app/static/cocklebur-logo.png',
+    'app/templates/index.html', 'app/templates/project.html',
+]
+
+FORBIDDEN_FILES = [
+    '.env', 'data/.instance_secret', 'data/.instance_id', 'data/.host_key',
+    'data/.instance_auth.json',
+]
+FORBIDDEN_TOP_LEVEL = [
+    'desktop.py', 'build_desktop.py', 'requirements-desktop.txt',
+    'requirements-tauri.txt', 'INSTALL_LOCAL.md', 'run_local.py',
+    'src-tauri', '__MACOSX', 'tests', 'manual_tests', 'docs',
+]
+
+
+def fail(message: str) -> None:
+    raise SystemExit(message)
+
+
+def main() -> None:
+    missing = [x for x in REQUIRED if not (ROOT / x).exists()]
+    if missing:
+        fail('Missing required server release files: ' + ', '.join(missing))
+    print('PASS — required server release files present')
+
+    forbidden = [x for x in FORBIDDEN_FILES if (ROOT / x).exists()]
+    forbidden += [x for x in FORBIDDEN_TOP_LEVEL if (ROOT / x).exists()]
+    if forbidden:
+        fail('Forbidden release artifacts present: ' + ', '.join(forbidden))
+
+    caches = []
+    for p in ROOT.rglob('*'):
+        if p.is_dir() and p.name in {'__pycache__', '.pytest_cache'}:
+            caches.append(p)
+        elif p.is_file() and (p.suffix in {'.pyc', '.pyo'} or p.name.startswith('._') or p.name == '.DS_Store'):
+            caches.append(p)
+    if caches:
+        fail('Cache/metadata artifacts present: ' + ', '.join(str(p.relative_to(ROOT)) for p in caches[:10]))
+    print('PASS — no runtime secrets, project data, tests, desktop tooling, or OS cache metadata')
+
+    if not compileall.compile_dir(ROOT / 'app', quiet=1):
+        fail('Python compile failed')
+    print('PASS — Python syntax')
+
+    if shutil.which('node'):
+        result = subprocess.run(['node', '--check', str(ROOT / 'app/static/app.js')], cwd=ROOT)
+        if result.returncode:
+            fail('JavaScript syntax failed')
+        print('PASS — JavaScript syntax')
+
+    release = (ROOT / 'RELEASE.md').read_text('utf-8')
+    for marker in ['SERVER-INSTANCE-AUTH-01', '0.2.16', 'Project pack format:** 1.0']:
+        if marker not in release:
+            fail(f'Missing release marker: {marker}')
+
+    # compileall creates __pycache__; remove it so validation does not dirty the package.
+    for p in sorted(ROOT.rglob('__pycache__'), key=lambda x: len(x.parts), reverse=True):
+        shutil.rmtree(p, ignore_errors=True)
+    for p in ROOT.rglob('*.pyc'):
+        p.unlink(missing_ok=True)
+
+    print('PASS — package guard complete')
+
+
+if __name__ == '__main__':
+    main()
