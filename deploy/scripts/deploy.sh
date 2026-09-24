@@ -61,32 +61,41 @@ fi
 
 NAMESPACE="${GLOBAL_NAMESPACE:-${NAMESPACE:-cocklebur-app}}"
 
+CURRENT_KUBE_CTX="$(kubectl config current-context 2>/dev/null || echo "")"
 case "$ENV" in
   eng)
-    EXPECTED_CONTEXT="${KUBE_CONTEXT:-${ENG_KUBE_CONTEXT:-eng-k8s}}"
+    EXPECTED_CONTEXT="${KUBE_CONTEXT:-${ENG_KUBE_CONTEXT:-$CURRENT_KUBE_CTX}}"
     DEFAULT_DOMAIN="${ENG_DEFAULT_DOMAIN:-cocklebur-eng.example.com}"
+    REGISTRY="${ENG_REGISTRY:-}"
     IMAGE_TAG="${ENG_IMAGE_TAG:-latest}"
+    STORAGE_CLASS="${ENG_STORAGE_CLASS:-}"
     CA_ISSUER="${ENG_CA_ISSUER:-internal-ca-issuer}"
     CA_SECRET="${ENG_CA_SECRET:-internal-ca-secret}"
     ;;
   uat)
-    EXPECTED_CONTEXT="${KUBE_CONTEXT:-${UAT_KUBE_CONTEXT:-uat-k8s}}"
+    EXPECTED_CONTEXT="${KUBE_CONTEXT:-${UAT_KUBE_CONTEXT:-$CURRENT_KUBE_CTX}}"
     DEFAULT_DOMAIN="${UAT_DEFAULT_DOMAIN:-cocklebur-uat.example.com}"
+    REGISTRY="${UAT_REGISTRY:-}"
     IMAGE_TAG="${UAT_IMAGE_TAG:-latest}"
+    STORAGE_CLASS="${UAT_STORAGE_CLASS:-}"
     CA_ISSUER="${UAT_CA_ISSUER:-internal-ca-issuer}"
     CA_SECRET="${UAT_CA_SECRET:-internal-ca-secret}"
     ;;
   stg)
-    EXPECTED_CONTEXT="${KUBE_CONTEXT:-${STG_KUBE_CONTEXT:-stg-k8s}}"
+    EXPECTED_CONTEXT="${KUBE_CONTEXT:-${STG_KUBE_CONTEXT:-$CURRENT_KUBE_CTX}}"
     DEFAULT_DOMAIN="${STG_DEFAULT_DOMAIN:-cocklebur-stg.example.com}"
+    REGISTRY="${STG_REGISTRY:-}"
     IMAGE_TAG="${STG_IMAGE_TAG:-latest}"
+    STORAGE_CLASS="${STG_STORAGE_CLASS:-}"
     CA_ISSUER="${STG_CERT_ISSUER:-letsencrypt-prod}"
     CA_SECRET=""
     ;;
   prod)
-    EXPECTED_CONTEXT="${KUBE_CONTEXT:-${PROD_KUBE_CONTEXT:-prod-k8s}}"
+    EXPECTED_CONTEXT="${KUBE_CONTEXT:-${PROD_KUBE_CONTEXT:-$CURRENT_KUBE_CTX}}"
     DEFAULT_DOMAIN="${PROD_DEFAULT_DOMAIN:-cocklebur.example.com}"
-    IMAGE_TAG="${PROD_IMAGE_TAG:-0.2.16}"
+    REGISTRY="${PROD_REGISTRY:-}"
+    IMAGE_TAG="${PROD_IMAGE_TAG:-0.2.17}"
+    STORAGE_CLASS="${PROD_STORAGE_CLASS:-}"
     CA_ISSUER="${PROD_CERT_ISSUER:-letsencrypt-prod}"
     CA_SECRET=""
     ;;
@@ -244,10 +253,32 @@ if [[ "$TOOL" == "kustomize" ]]; then
 
   MANIFESTS="$(kubectl kustomize "$OVERLAY_DIR")"
   
-  # 若 DOMAIN 不是預設值，動態替換注入 Ingress 與 Certificate
+  # 動態替換注入自訂網域 (替換範本佔位符與預設網域)
+  echo "套用網域 ${DOMAIN} 至 Ingress 與 Certificate..."
+  MANIFESTS="$(echo "$MANIFESTS" | sed "s/cocklebur-${ENV}\.example\.com/${DOMAIN}/g")"
+  MANIFESTS="$(echo "$MANIFESTS" | sed "s/cocklebur\.example\.com/${DOMAIN}/g")"
   if [[ "$DOMAIN" != "$DEFAULT_DOMAIN" ]]; then
-    echo "套用自訂網域 ${DOMAIN} 至 Ingress 與 Certificate..."
     MANIFESTS="$(echo "$MANIFESTS" | sed "s/${DEFAULT_DOMAIN}/${DOMAIN}/g")"
+  fi
+
+  # 動態替換 Registry
+  if [[ -n "$REGISTRY" ]]; then
+    echo "套用映像檔倉庫 ${REGISTRY}..."
+    MANIFESTS="$(echo "$MANIFESTS" | sed -E "s@registry\.example\.com/(team|prod)@${REGISTRY}@g")"
+  fi
+
+  # 動態替換 StorageClass
+  if [[ -n "$STORAGE_CLASS" ]]; then
+    echo "套用儲存類別 ${STORAGE_CLASS}..."
+    MANIFESTS="$(echo "$MANIFESTS" | sed "s/storageClassName: .*/storageClassName: ${STORAGE_CLASS}/g")"
+  fi
+
+  # 動態替換自簽 CA Issuer 與 Secret
+  if [[ -n "$CA_ISSUER" ]]; then
+    MANIFESTS="$(echo "$MANIFESTS" | sed "s/internal-ca-issuer/${CA_ISSUER}/g")"
+  fi
+  if [[ -n "$CA_SECRET" ]]; then
+    MANIFESTS="$(echo "$MANIFESTS" | sed "s/internal-ca-secret/${CA_SECRET}/g")"
   fi
 
   echo "$MANIFESTS" | kubectl apply -f -

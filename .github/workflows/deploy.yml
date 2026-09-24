@@ -1,0 +1,171 @@
+name: Cocklebur CI/CD Pipeline
+
+on:
+  # 1. 偵測特定分支 Push (例如 develop 或 feat/ 觸發 UAT 自動建置與部署)
+  push:
+    branches:
+      - develop
+      - 'feat/**'
+      - main
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.gitignore'
+
+  # 2. 支援手動觸發 (可自選動作與環境)
+  workflow_dispatch:
+    inputs:
+      target_env:
+        description: '選擇部署目標環境'
+        required: true
+        default: 'uat'
+        type: choice
+        options:
+          - uat
+          - stg
+      action:
+        description: '執行動作 (build-only: 僅建置推圖; deploy: 部署至叢集)'
+        required: true
+        default: 'deploy'
+        type: choice
+        options:
+          - deploy
+          - build-only
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1: 程式碼檢查與測試 (CI)
+  # ---------------------------------------------------------------------------
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pip install flake8 pytest
+
+      - name: Run Syntax & Lint Check
+        run: |
+          # 檢查 Python 語法與部署腳本語法
+          flake8 app --count --select=E9,F63,F7,F82 --show-source --statistics
+          bash -n deploy/scripts/*.sh
+
+  # ---------------------------------------------------------------------------
+  # Job 2: UAT 環境自動建置與部署 (Push to develop / feat 或手動觸發)
+  # ---------------------------------------------------------------------------
+  deploy-uat:
+    name: Build & Deploy to UAT
+    needs: lint-and-test
+    if: (github.ref == 'refs/heads/develop' || startsWith(github.ref, 'refs/heads/feat/')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.target_env == 'uat')
+    runs-on: [self-hosted, linux] # 內部私有網路建議使用 self-hosted runner，可直通內部 Registry 與叢集
+    environment:
+      name: uat
+      url: https://${{ secrets.UAT_DOMAIN }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Private Registry (Least-Privilege Robot Account)
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.UAT_REGISTRY_HOST }} # 例: registry.example.com/team
+          username: ${{ secrets.CI_REGISTRY_ROBOT_USER }}
+          password: ${{ secrets.CI_REGISTRY_ROBOT_PASSWORD }}
+
+      - name: Build & Push Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ secrets.UAT_REGISTRY_HOST }}/cocklebur-server:${{ github.sha }},${{ secrets.UAT_REGISTRY_HOST }}/cocklebur-server:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Set up Minimal Kubeconfig
+        run: |
+          mkdir -p $HOME/.kube
+          echo "${{ secrets.UAT_KUBECONFIG }}" > $HOME/.kube/config
+          chmod 600 $HOME/.kube/config
+
+      - name: Deploy to UAT Cluster
+        env:
+          DOMAIN: ${{ secrets.UAT_DOMAIN }} # 例: cocklebur-uat.example.com
+        run: |
+          # 使用最小權限執行部署
+          ./deploy/scripts/deploy.sh uat --no-build
+
+  # ---------------------------------------------------------------------------
+  # Job 3: STG 映像檔建置 (自動建置並推送至 STG Registry)
+  # ---------------------------------------------------------------------------
+  build-stg-image:
+    name: Build & Push STG Image
+    needs: lint-and-test
+    if: github.ref == 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && github.event.inputs.target_env == 'stg')
+    runs-on: [self-hosted, linux]
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to STG Registry (Robot Account)
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.STG_REGISTRY_HOST }} # 例: registry.example.com/prod
+          username: ${{ secrets.CI_REGISTRY_ROBOT_USER }}
+          password: ${{ secrets.CI_REGISTRY_ROBOT_PASSWORD }}
+
+      - name: Build & Push Image to STG
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ secrets.STG_REGISTRY_HOST }}/cocklebur-server:${{ github.sha }},${{ secrets.STG_REGISTRY_HOST }}/cocklebur-server:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ---------------------------------------------------------------------------
+  # Job 4: STG 叢集部署 (需由 Repo Manager 人工審批手動確認)
+  # ---------------------------------------------------------------------------
+  deploy-stg:
+    name: Manual Approval Deploy to STG
+    needs: build-stg-image
+    if: github.event.inputs.action != 'build-only'
+    runs-on: [self-hosted, linux]
+    environment:
+      name: stg # 在 GitHub Settings -> Environments -> stg 配置 Required Reviewers 實現人工審批
+      url: https://${{ secrets.STG_DOMAIN }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Minimal Kubeconfig
+        run: |
+          mkdir -p $HOME/.kube
+          echo "${{ secrets.STG_KUBECONFIG }}" > $HOME/.kube/config
+          chmod 600 $HOME/.kube/config
+
+      - name: Deploy to STG Cluster
+        env:
+          DOMAIN: ${{ secrets.STG_DOMAIN }} # 例: cocklebur-stg.example.com
+        run: |
+          ./deploy/scripts/deploy.sh stg --no-build

@@ -12,3 +12,6 @@ dist/
 build/
 *.spec
 deploy/k8s/overlays/*/env-config.env
+
+backups/
+*.tar.gz
