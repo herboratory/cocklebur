@@ -102,7 +102,7 @@ elif [[ -f "${ROOT_DIR}/.env" ]]; then
   ENV_FILE="${ROOT_DIR}/.env"
 fi
 
-POPUP_BASE_URL="${POPUP_BASE_URL}"
+POPUP_BASE_URL="${POPUP_BASE_URL:-}"
 COCKLEBUR_BOOTSTRAP_KEY=""
 POPUP_SECRET_KEY=""
 
@@ -234,7 +234,7 @@ kubectl create secret generic cocklebur-secrets \
 # -----------------------------------------------------------------------------
 OVERLAY_DIR="${ROOT_DIR}/deploy/k8s/overlays/${ENV}"
 echo "建立 / 更新 ConfigMap 'cocklebur-config'..."
-kubectl create configmap cocklebur-config --namespace="$NAMESPACE" --from-literal=POPUP_APP_MODE="server" --from-literal=POPUP_DATA_DIR="/data" --from-literal=POPUP_BASE_URL="${POPUP_BASE_URL}" --from-literal=POPUP_MAX_UPLOAD_MB="50" --from-literal=POPUP_IMPORT_MAX_MB="2048" --from-literal=POPUP_PROJECT_QUOTA_MB="1024" --dry-run=client -o yaml | kubectl apply -f -
+kubectl create configmap cocklebur-config --namespace="$NAMESPACE" --from-literal=POPUP_APP_MODE="server" --from-literal=POPUP_DATA_DIR="/data" --from-literal=POPUP_BASE_URL="${POPUP_BASE_URL:-}" --from-literal=POPUP_MAX_UPLOAD_MB="50" --from-literal=POPUP_IMPORT_MAX_MB="2048" --from-literal=POPUP_PROJECT_QUOTA_MB="1024" --dry-run=client -o yaml | kubectl apply -f -
 
 # -----------------------------------------------------------------------------
 # 8. 執行部署 (Kustomize 或 Helm)
