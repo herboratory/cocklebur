@@ -1,45 +1,89 @@
 # Cocklebur Server User Guide
 
-## 1. Instance access vs project roles
+## 1. Projects and Host access
 
-Cocklebur has two different authorization scopes.
+The Server Host controls whether this Cocklebur instance may create or import projects. Project Owner / Member / Viewer roles do not grant Host access.
 
-**Instance:** Host, Create projects, Import project packs.  
-**Project:** Owner, Member, Viewer.
+After Host access is unlocked, choose **New project** or **Import pack** from Projects.
 
-A project role never automatically grants instance Create/Import.
-
-## 2. Host
-
-Host administers the Cocklebur instance and always has Create + Import. Host can also grant or remove Create / Import independently for existing project identities from **Projects → Instance permissions**.
-
-Host is not automatically Owner of every project and should not be treated as a universal project reader.
-
-## 3. Project roles
+## 2. Project roles
 
 - **Owner:** project administration, invitations, roles, recovery, export/close/delete.
-- **Member:** normal writing, replies, Cards, and uploads.
-- **Viewer:** read-only for project content; may update their own display name.
+- **Member:** normal project writing, replies, and uploads.
+- **Viewer:** read-only for project content; may still update their own display name.
 
 A project may have multiple Owners. The last Owner cannot be demoted or removed.
 
-## 4. Create / Import delegation
+## 3. Cards
 
-A Member, Viewer, or Owner may additionally receive:
+Cards are To-do or Event items and can contain status, dates, assignees, tags, Markdown content, and checklist items.
 
-- **Create projects** — New project becomes available; creator becomes Owner of the new project.
-- **Import project packs** — Import becomes available; importing browser receives Owner access to the imported project.
+### Visibility
 
-These capabilities do not change the person's role in existing projects.
+- **Everyone:** all project members who otherwise have access to the project can see the Card.
+- **Only me:** only the Card creator can see it.
 
-## 5. Invitations and recovery
+### Edit access
 
-Owner-generated invitations create project-scoped browser access. Collaborator recovery restores the same project identity and preserves other valid browser sessions.
+- **Shared:** Owners/Members who can see the Card may edit it.
+- **Creator only:** only the Card creator may edit it.
 
-Owners also have a rotating break-glass Owner recovery code.
+Assignees indicate responsibility and do not change visibility or edit permission.
 
-Host recovery is separate from Owner recovery. After first Host claim, the deployment bootstrap key is disabled as a Host login method; use the current Host recovery code on another browser.
+Delete is always creator-only for both To-do and Event cards.
 
-## 6. Cards, Discussion, Files and Export
+Card Activity records human-readable history such as who completed/reopened a checklist item or changed content/status/schedule.
 
-Cards support visibility, shared/creator-only edit access, tags, assignees, dates, checklists and audit history. Discussion uses channels and titled threads. Files keep original uploads plus metadata. Export produces a portable project pack containing structured data, readable text and original files.
+## 4. Announcements
+
+Use Announcements for high-signal project-wide notices.
+
+## 5. Discussion
+
+Discussion uses channels, titled threads, and replies. Owners can configure channel visibility for everyone, selected roles, or selected people. Members can participate in channels they can see; Viewers are read-only.
+
+## 6. Files
+
+Upload/download original files with optional metadata and Card links. Cocklebur enforces per-file size and project quota limits and records SHA-256 digest metadata.
+
+Folders and macOS `.app` bundles should be compressed to ZIP before upload.
+
+## 7. Invitations
+
+An Owner generates an invite link/QR. The invited person opens it, enters a display name (and optional PIN), and receives a project-scoped browser credential.
+
+The invitation link is not the person's long-term credential.
+
+## 8. Recovery
+
+If a collaborator loses browser access, an Owner can generate a one-time recovery link for that existing identity.
+
+The link first opens a confirmation page. Recovery is completed only after confirmation, so link previews/prefetch do not consume the token.
+
+Recovery restores that existing identity and does **not** invalidate other valid browser sessions.
+
+Owners also have a break-glass Owner recovery code. A successful Owner recovery rotates the code; save the newly issued code.
+
+## 9. Conflict handling
+
+If two people edit the same mutable entity from the same old version, the later stale save receives a conflict response rather than silently overwriting the newer version.
+
+## 10. Export
+
+**Export current state** creates a consistent ZIP containing:
+
+- `data/` — machine-readable project state
+- `readable/` — human-readable text
+- `files/` — original uploads
+
+Export is available at any time.
+
+## 11. Closing a project
+
+Owners can review the project, export the current state, then archive or delete the canonical server copy. Permanent deletion requires a current export.
+
+## 12. Restore
+
+Use **Import pack** from Projects after obtaining Host access. The pack is validated before installation. The importing browser receives Owner access and a fresh Owner recovery code.
+
+If the same project ID already exists on the instance, import is rejected instead of silently creating a second writable copy.

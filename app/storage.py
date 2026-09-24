@@ -22,7 +22,6 @@ from .security import new_recovery_code, new_token, safe_filename, safe_id, toke
 
 FORMAT_NAME = "popup-workspace-pack"
 FORMAT_VERSION = "1.0"
-INSTANCE_AUTH_VERSION = 1
 
 
 class NotFoundError(Exception):
@@ -271,6 +270,19 @@ class CapsuleStore:
         projects.sort(key=lambda x: x.get("content_updated_at", ""), reverse=True)
         return projects
 
+    def list_project_ids(self) -> list[str]:
+        ids: set[str] = set()
+        for root in self.root.glob("p_*"):
+            if root.is_dir() and (root / "project.json").exists():
+                ids.add(root.name)
+        for pid, custom in self._registry().items():
+            try:
+                if (Path(custom).resolve() / "project.json").exists():
+                    ids.add(pid)
+            except Exception:
+                continue
+        return sorted(ids)
+
     def get_project(self, project_id: str) -> dict[str, Any]:
         return self._read_json(self._path(project_id, "project.json"))
 
@@ -348,176 +360,6 @@ class CapsuleStore:
             out.append(item)
             if len(out) >= limit:
                 break
-        return out
-
-    # ---- Instance Host / delegated instance permissions ----
-    def _instance_auth_path(self) -> Path:
-        return self.root / ".instance_auth.json"
-
-    @staticmethod
-    def _instance_auth_default() -> dict[str, Any]:
-        return {"version": INSTANCE_AUTH_VERSION, "host": None, "grants": []}
-
-    def _read_instance_auth(self) -> dict[str, Any]:
-        path = self._instance_auth_path()
-        obj = self._read_json(path, self._instance_auth_default()) if path.exists() else self._instance_auth_default()
-        if not isinstance(obj, dict):
-            raise ValidationError("Corrupt instance auth state")
-        obj.setdefault("version", INSTANCE_AUTH_VERSION)
-        obj.setdefault("host", None)
-        obj.setdefault("grants", [])
-        if not isinstance(obj["grants"], list):
-            obj["grants"] = []
-        return obj
-
-    def host_claimed(self) -> bool:
-        return bool(self._read_instance_auth().get("host"))
-
-    @staticmethod
-    def _public_host(host: dict[str, Any] | None) -> dict[str, Any] | None:
-        if not host:
-            return None
-        return {k: host.get(k) for k in ["display_name", "claimed_at", "recovery_updated_at"]}
-
-    def claim_host(self, display_name: str) -> tuple[dict[str, Any], str, str]:
-        path = self._instance_auth_path()
-        lock = FileLock(str(path) + ".lock", timeout=15)
-        with lock:
-            obj = self._read_json(path, self._instance_auth_default()) if path.exists() else self._instance_auth_default()
-            if obj.get("host"):
-                raise ConflictError("This Cocklebur instance already has a Host")
-            access = new_token()
-            recovery = new_recovery_code()
-            ts = now_iso()
-            host = {
-                "display_name": (display_name or "Host").strip()[:100] or "Host",
-                "claimed_at": ts,
-                "access_hashes": [token_hash(access)],
-                "recovery_hash": token_hash(recovery),
-                "recovery_updated_at": ts,
-            }
-            obj = {"version": INSTANCE_AUTH_VERSION, "host": host, "grants": obj.get("grants", []) or []}
-            self._atomic_write_json(path, obj)
-            return self._public_host(host) or {}, access, recovery
-
-    def resolve_host(self, token: str | None) -> dict[str, Any] | None:
-        if not token:
-            return None
-        host = self._read_instance_auth().get("host")
-        if not host:
-            return None
-        h = token_hash(token)
-        if h in (host.get("access_hashes") or []):
-            return self._public_host(host)
-        return None
-
-    def recover_host(self, code: str) -> tuple[dict[str, Any], str, str]:
-        path = self._instance_auth_path()
-        lock = FileLock(str(path) + ".lock", timeout=15)
-        with lock:
-            obj = self._read_json(path, self._instance_auth_default()) if path.exists() else self._instance_auth_default()
-            host = obj.get("host")
-            if not host:
-                raise ValidationError("This Cocklebur instance has not been claimed by a Host yet")
-            if token_hash((code or "").strip().upper()) != host.get("recovery_hash"):
-                raise PermissionError_("Invalid Host recovery code")
-            access = new_token()
-            recovery = new_recovery_code()
-            hashes = [x for x in (host.get("access_hashes") or []) if x]
-            hashes.append(token_hash(access))
-            host["access_hashes"] = hashes[-8:]
-            host["recovery_hash"] = token_hash(recovery)
-            host["recovery_updated_at"] = now_iso()
-            self._atomic_write_json(path, obj)
-            return self._public_host(host) or {}, access, recovery
-
-    def rotate_host_recovery(self) -> str:
-        path = self._instance_auth_path()
-        lock = FileLock(str(path) + ".lock", timeout=15)
-        with lock:
-            obj = self._read_json(path, self._instance_auth_default()) if path.exists() else self._instance_auth_default()
-            host = obj.get("host")
-            if not host:
-                raise ValidationError("This Cocklebur instance has not been claimed by a Host yet")
-            recovery = new_recovery_code()
-            host["recovery_hash"] = token_hash(recovery)
-            host["recovery_updated_at"] = now_iso()
-            self._atomic_write_json(path, obj)
-            return recovery
-
-    def instance_grants(self) -> list[dict[str, Any]]:
-        return [dict(x) for x in self._read_instance_auth().get("grants", []) if isinstance(x, dict)]
-
-    def set_instance_permissions(self, project_id: str, person_id: str, *, can_create_projects: bool, can_import_projects: bool) -> dict[str, Any]:
-        # Validate that the identity still exists before granting instance capabilities.
-        person = self.person(project_id, person_id)
-        project = self.get_project(project_id)
-        path = self._instance_auth_path()
-        lock = FileLock(str(path) + ".lock", timeout=15)
-        with lock:
-            obj = self._read_json(path, self._instance_auth_default()) if path.exists() else self._instance_auth_default()
-            grants = [g for g in (obj.get("grants") or []) if not (g.get("project_id") == project_id and g.get("person_id") == person_id)]
-            if can_create_projects or can_import_projects:
-                grants.append({
-                    "project_id": project_id,
-                    "person_id": person_id,
-                    "can_create_projects": bool(can_create_projects),
-                    "can_import_projects": bool(can_import_projects),
-                    "updated_at": now_iso(),
-                })
-            obj["grants"] = grants
-            self._atomic_write_json(path, obj)
-        return {
-            "project_id": project_id,
-            "project_name": project.get("name", project_id),
-            "person_id": person_id,
-            "display_name": person.get("display_name", person_id),
-            "role": person.get("role", "member"),
-            "can_create_projects": bool(can_create_projects),
-            "can_import_projects": bool(can_import_projects),
-        }
-
-    def remove_instance_grant(self, project_id: str, person_id: str | None = None) -> None:
-        path = self._instance_auth_path()
-        if not path.exists():
-            return
-        lock = FileLock(str(path) + ".lock", timeout=15)
-        with lock:
-            obj = self._read_json(path, self._instance_auth_default())
-            before = obj.get("grants") or []
-            if person_id is None:
-                obj["grants"] = [g for g in before if g.get("project_id") != project_id]
-            else:
-                obj["grants"] = [g for g in before if not (g.get("project_id") == project_id and g.get("person_id") == person_id)]
-            self._atomic_write_json(path, obj)
-
-    def instance_people_catalog(self) -> list[dict[str, Any]]:
-        grants = {(g.get("project_id"), g.get("person_id")): g for g in self.instance_grants()}
-        out: list[dict[str, Any]] = []
-        roots = {p.resolve() for p in self.root.glob("p_*") if p.is_dir()}
-        for _pid, custom in self._registry().items():
-            roots.add(Path(custom).resolve())
-        for root in sorted(roots, key=lambda x: str(x)):
-            if not (root / "project.json").exists() or not (root / "people.json").exists():
-                continue
-            try:
-                project = self._read_json(root / "project.json")
-                if project.get("mode") != "server":
-                    continue
-                for person in self._read_json(root / "people.json", []):
-                    grant = grants.get((project.get("id"), person.get("id")), {})
-                    out.append({
-                        "project_id": project.get("id"),
-                        "project_name": project.get("name", project.get("id")),
-                        "person_id": person.get("id"),
-                        "display_name": person.get("display_name", person.get("id")),
-                        "role": person.get("role", "member"),
-                        "can_create_projects": bool(grant.get("can_create_projects")),
-                        "can_import_projects": bool(grant.get("can_import_projects")),
-                    })
-            except (ValidationError, NotFoundError):
-                continue
-        out.sort(key=lambda x: (str(x.get("display_name", "")).casefold(), str(x.get("project_name", "")).casefold()))
         return out
 
     # ---- People / auth ----
@@ -615,7 +457,6 @@ class CapsuleStore:
             self._atomic_write_json(path, people)
             self._touch_content_unlocked(project_id)
             self._activity_unlocked(project_id, actor_id, "member.removed", target["display_name"])
-        self.remove_instance_grant(project_id, person_id)
 
     def issue_access(self, project_id: str, person_id: str, actor_id: str = "system") -> str:
         """Issue a fresh browser access token directly.
@@ -747,13 +588,46 @@ class CapsuleStore:
         safe_id(card_id, "card id")
         return self._read_json(self._path(project_id, f"cards/{card_id}.json"))
 
-    def create_card(self, project_id: str, payload: dict[str, Any], actor_id: str) -> dict[str, Any]:
+    @staticmethod
+    def _normalize_card_fields(card: dict[str, Any], previous_type: str | None = None) -> None:
+        card_type = card.get("type") or "task"
+        if card_type == "note":
+            if card.get("status") not in {"active", "archived"}:
+                old_status = card.get("status")
+                card["status"] = "archived" if old_status in {"done", "happened", "archived"} else "active"
+            card["start"] = None
+            card["end"] = None
+            card["all_day"] = False
+            card["assignees"] = []
+        elif previous_type == "note" and card.get("status") in {"active", "archived"}:
+            card["status"] = "archived" if card.get("status") == "archived" else ("scheduled" if card_type == "event" else "todo")
+
+    def _card_idempotency_path(self, project_id: str) -> Path:
+        return self._path(project_id, ".card-create-idempotency.json")
+
+    def create_card(self, project_id: str, payload: dict[str, Any], actor_id: str, idempotency_key: str | None = None) -> tuple[dict[str, Any], bool]:
         with self.project_lock(project_id):
+            idem_path = self._card_idempotency_path(project_id)
+            idem = self._read_json(idem_path, {}) if idem_path.exists() else {}
+            scoped_key = None
+            if idempotency_key:
+                key = str(idempotency_key).strip()
+                if len(key) > 160:
+                    raise ValidationError("Idempotency key is too long")
+                scoped_key = f"{actor_id}:{key}"
+                prior = idem.get(scoped_key)
+                if isinstance(prior, dict) and prior.get("card_id"):
+                    try:
+                        return self.get_card(project_id, prior["card_id"]), True
+                    except NotFoundError:
+                        idem.pop(scoped_key, None)
             cid = self._new_id("c")
             ts = now_iso()
+            card_type = payload.get("type", "task")
             card = {
-                "id": cid, "version": 1, "type": payload.get("type", "task"), "title": payload["title"],
-                "status": payload.get("status", "todo"), "start": payload.get("start"), "end": payload.get("end"),
+                "id": cid, "version": 1, "type": card_type, "title": payload["title"],
+                "status": payload.get("status", "active" if card_type == "note" else "todo"),
+                "start": payload.get("start"), "end": payload.get("end"),
                 "all_day": payload.get("all_day", False), "assignees": payload.get("assignees", []),
                 "description": payload.get("description", ""), "content": payload.get("content", ""),
                 "tags": payload.get("tags", []), "linked_files": payload.get("linked_files", []),
@@ -761,10 +635,18 @@ class CapsuleStore:
                 "visibility": payload.get("visibility", "everyone"),
                 "created_by": actor_id, "updated_by": actor_id, "created_at": ts, "updated_at": ts,
             }
+            self._normalize_card_fields(card)
             self._atomic_write_json(self._path(project_id, f"cards/{cid}.json"), card)
+            if scoped_key:
+                idem[scoped_key] = {"card_id": cid, "created_at": ts}
+                if len(idem) > 300:
+                    oldest = sorted(idem.items(), key=lambda kv: str((kv[1] or {}).get("created_at", "")))[:-250]
+                    for old_key, _ in oldest:
+                        idem.pop(old_key, None)
+                self._atomic_write_json(idem_path, idem)
             self._touch_content_unlocked(project_id)
             self._activity_unlocked(project_id, actor_id, "card.created", card["title"], {"card_id": cid, "edit_access": card["edit_access"], "visibility": card["visibility"], "creator_id": actor_id})
-            return card
+            return card, False
 
     def update_card(self, project_id: str, card_id: str, patch: dict[str, Any], actor_id: str) -> dict[str, Any]:
         with self.project_lock(project_id):
@@ -777,6 +659,7 @@ class CapsuleStore:
             for key, value in patch.items():
                 if value is not None:
                     card[key] = value
+            self._normalize_card_fields(card, before.get("type"))
             card.setdefault("edit_access", "public")
             card.setdefault("visibility", "everyone")
             card["version"] += 1
@@ -1154,7 +1037,7 @@ class CapsuleStore:
     def _copy_snapshot_unlocked(self, project_id: str, dest: Path) -> None:
         src = self.project_root(project_id)
         def ignore(_dir: str, names: list[str]) -> set[str]:
-            return {n for n in names if n.endswith(".lock") or n.endswith(".tmp") or n.endswith(".bak")}
+            return {n for n in names if n.endswith(".lock") or n.endswith(".tmp") or n.endswith(".bak") or n == ".card-create-idempotency.json"}
         shutil.copytree(src, dest, ignore=ignore)
 
     @staticmethod
@@ -1220,9 +1103,17 @@ class CapsuleStore:
         overview += [f"- {p['display_name']} ({p['role']})" for p in people]
         (readable / "overview.txt").write_text("\n".join(overview) + "\n", "utf-8")
         card_lines = []
+        note_lines = []
         for c in cards:
-            card_lines += [f"[{c.get('status','')}] {c['title']} ({c.get('type','task')})", f"Updated: {c.get('updated_at','')}", f"Tags: {', '.join(c.get('tags', [])) or '—'}", c.get("content", ""), "", "---", ""]
+            lines = [f"[{c.get('status','')}] {c['title']} ({c.get('type','task')})", f"Updated: {c.get('updated_at','')}", f"Tags: {', '.join(c.get('tags', [])) or '—'}", c.get("content", ""), "", "---", ""]
+            if c.get("type") == "note":
+                note_lines += lines
+            else:
+                card_lines += lines
+        # Keep the legacy tasks-and-events filename for pack 1.0 readers; Notes
+        # are canonical Card JSON and also receive their own readable export.
         (readable / "tasks-and-events.txt").write_text("\n".join(card_lines), "utf-8")
+        (readable / "notes.txt").write_text("\n".join(note_lines), "utf-8")
         ann_lines = []
         for a in announcements:
             if a.get("deleted"): continue
@@ -1244,6 +1135,100 @@ class CapsuleStore:
                         lines += [f"{prefix} {m.get('title','')} [{m.get('ts','')}] actor={m.get('actor_id','')}", m.get("body", ""), ""]
                     lines += ["---", ""]
             (dr / f"{safe_filename(ch['name'])}.txt").write_text("\n".join(lines), "utf-8")
+
+    def export_workspace_bundle(self, project_ids: list[str]) -> tuple[Path, dict[str, Any]]:
+        ids = list(dict.fromkeys(project_ids))
+        if not ids:
+            raise ValidationError("No accessible projects to export")
+        with tempfile.TemporaryDirectory(prefix="cocklebur_workspace_") as td:
+            root = Path(td) / "workspace"
+            root.mkdir(parents=True)
+            projects_dir = root / "projects"
+            projects_dir.mkdir()
+            items: list[dict[str, Any]] = []
+            checksums: dict[str, str] = {}
+            for pid in ids:
+                if not self.exists(pid):
+                    raise NotFoundError("project")
+                pack, meta = self.export_project(pid)
+                target = projects_dir / f"{pid}.zip"
+                shutil.copy2(pack, target)
+                pack.unlink(missing_ok=True)
+                rel = target.relative_to(root).as_posix()
+                digest = self._sha256_file(target)
+                checksums[rel] = digest
+                items.append({"project_id": pid, "project_name": meta.get("project_name"), "file": rel, "sha256": digest})
+            manifest = {
+                "format": "cocklebur-workspace-bundle",
+                "format_version": "1.0",
+                "exported_at": now_iso(),
+                "source_instance_id": self.settings.instance_id,
+                "projects": items,
+            }
+            self._atomic_write_json(root / "bundle-manifest.json", manifest)
+            self._atomic_write_json(root / "checksums.json", checksums)
+            out_dir = self.root / ".exports"
+            out_dir.mkdir(exist_ok=True)
+            out = out_dir / f"Cocklebur_Workspace_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+            with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                for f in sorted(root.rglob("*")):
+                    if f.is_file():
+                        zf.write(f, f.relative_to(root).as_posix())
+            digest = self._sha256_file(out)
+        return out, {**manifest, "checksums": checksums, "zip_sha256": digest}
+
+    def _safe_extract_zip(self, zip_path: Path, dest: Path, max_bytes: int | None = None) -> None:
+        if not zipfile.is_zipfile(zip_path):
+            raise ValidationError("Not a valid ZIP")
+        limit = max_bytes if max_bytes is not None else self.settings.max_import_mb * 1024 * 1024
+        with zipfile.ZipFile(zip_path) as zf:
+            total_uncompressed = sum(info.file_size for info in zf.infolist())
+            if total_uncompressed > limit:
+                raise ValidationError("Archive expands beyond the configured limit")
+            for info in zf.infolist():
+                name = info.filename
+                if name.startswith(("/", "\\")) or ".." in Path(name).parts:
+                    raise ValidationError("Unsafe ZIP path")
+                target = (dest / name).resolve()
+                if dest.resolve() not in target.parents and target != dest.resolve():
+                    raise ValidationError("Unsafe ZIP path")
+            zf.extractall(dest)
+
+    def unpack_workspace_bundle(self, zip_path: Path, dest: Path) -> list[Path]:
+        self._safe_extract_zip(zip_path, dest)
+        manifest_path = dest / "bundle-manifest.json"
+        if not manifest_path.exists():
+            return [zip_path]
+        manifest = self._read_json(manifest_path)
+        if manifest.get("format") != "cocklebur-workspace-bundle" or manifest.get("format_version") != "1.0":
+            raise ValidationError("Unsupported Workspace Bundle")
+        checksum_path = dest / "checksums.json"
+        checksums = self._read_json(checksum_path, {}) if checksum_path.exists() else {}
+        packs: list[Path] = []
+        for item in manifest.get("projects", []):
+            rel = item.get("file", "")
+            path = (dest / rel).resolve()
+            if dest.resolve() not in path.parents or not path.is_file():
+                raise ValidationError("Invalid bundle project path")
+            expected = item.get("sha256") or checksums.get(rel)
+            if expected and self._sha256_file(path) != expected:
+                raise ValidationError(f"Workspace checksum mismatch: {rel}")
+            self.validate_pack(path)
+            packs.append(path)
+        if not packs:
+            raise ValidationError("Workspace Bundle contains no projects")
+        return packs
+
+    def preflight_pack(self, zip_path: Path) -> dict[str, Any]:
+        try:
+            manifest = self.validate_pack(zip_path)
+            pid = manifest.get("project_id")
+            status = "Duplicate ID" if pid and self.exists(pid) else "Ready"
+            return {"status": status, "project_id": pid, "project_name": manifest.get("project_name"), "format_version": manifest.get("format_version")}
+        except ValidationError as exc:
+            msg = str(exc)
+            status = "Incompatible version" if "version" in msg.lower() else "Invalid pack"
+            return {"status": status, "detail": msg}
 
     def validate_pack(self, zip_path: Path) -> dict[str, Any]:
         if not zipfile.is_zipfile(zip_path): raise ValidationError("Not a valid ZIP")
@@ -1360,6 +1345,10 @@ class CapsuleStore:
                 if card.get("visibility") not in {"everyone", "private"}:
                     card["visibility"] = "everyone"
                     changed = True
+                before_normalized = copy.deepcopy(card)
+                self._normalize_card_fields(card)
+                if card != before_normalized:
+                    changed = True
                 if changed:
                     self._atomic_write_json(card_path, card)
 
@@ -1377,4 +1366,3 @@ class CapsuleStore:
         if not root.exists(): raise NotFoundError("project")
         shutil.rmtree(root)
         self._unregister_root(project_id)
-        self.remove_instance_grant(project_id)

@@ -1,21 +1,21 @@
-# Cocklebur Server
+# Cocklebur Server — MVP
 
-**Release:** `0.2.16`  
+**Release:** `PW-MVP-01-FINAL / 0.2.15-mvp`  
 **Project pack format:** `1.0`
 
 Cocklebur Server is a lightweight, self-hosted project workspace for bounded projects: keep one canonical live copy, collaborate in a browser, then export the whole project as a portable ZIP when the work is done.
 
-This archive is the **Server distribution**. It intentionally does not include desktop build tooling.
+This archive is the **Server distribution**. It intentionally does not include the Local/pywebview/Tauri desktop build tooling or old acceptance/hotfix documents.
 
-Cocklebur is made available for non-commercial use under the included license.
+Cocklebur is intended for **personal, academic/research, teaching/educational, and non-commercial community use**. Commercial use is not granted; see `LICENSE`.
 
 ## Core model
 
 - One canonical server copy per active project.
 - File-backed storage: JSON / JSONL plus original uploaded files.
 - No CRDT, offline multi-master sync, or silent conflict merge.
-- Mutable entities use versions; stale writes return HTTP `409`.
-- Export includes machine-readable data, human-readable text, and original files.
+- Mutable entities use versions; stale writes return HTTP `409` instead of silently overwriting newer data.
+- Export creates a consistent snapshot and includes machine-readable data, human-readable text, and original files.
 - Server mode must run with **one application worker**.
 
 ## Quick start with Docker
@@ -24,75 +24,107 @@ Cocklebur is made available for non-commercial use under the included license.
 cp .env.example .env
 ```
 
-For a local test:
+For a local test, the defaults may remain:
 
 ```dotenv
 POPUP_APP_MODE=server
 POPUP_DATA_DIR=/data
 POPUP_HOST_PORT=8000
 POPUP_BASE_URL=http://127.0.0.1:8000
-COCKLEBUR_BOOTSTRAP_KEY=replace-with-a-long-random-secret
 ```
 
-`COCKLEBUR_HOST_KEY` is still accepted as a compatibility alias for the bootstrap key.
+For a stable deployment, also set a long random Host key:
 
-Then:
+```dotenv
+COCKLEBUR_HOST_KEY=replace-with-a-long-random-secret
+```
+
+Then start Cocklebur:
 
 ```bash
 docker compose up -d --build
 curl http://127.0.0.1:8000/health
 ```
 
-Open `http://127.0.0.1:8000`. For Internet-facing use, keep the raw app port private and put HTTPS in front of it through your own reverse proxy or tunnel.
+Open `http://127.0.0.1:8000` for a local test. For Internet-facing use, keep the app bound to localhost and put HTTPS in front of it through a reverse proxy or tunnel. See `DEPLOY_SERVER.md`.
 
-## Access model
+## Server access model
 
-Cocklebur separates infrastructure administration, instance administration, and project roles.
+Cocklebur separates **instance-level Host access** from **project roles**:
 
-- **Infrastructure Admin / Deployer** — controls the machine, Docker, storage, backups, and network. This is outside Cocklebur's app roles.
-- **Host** — application-level administrator for one Cocklebur instance.
-- **Owner** — administers one specific project.
+- **Host** — may create or import projects on this Cocklebur instance.
+- **Owner** — administers one project, invitations, roles, recovery, export/close/delete.
 - **Member** — normal project collaboration.
-- **Viewer** — read-only project access except for their own display name.
+- **Viewer** — read-only project access, except they may update their own display name.
 
-A person can also receive either or both of these **instance permissions** without becoming Host:
-
-- **Create projects** — may create a new project and becomes Owner of that new project.
-- **Import project packs** — may import a project pack and receives Owner access to the imported project.
-
-Project Owner / Member / Viewer roles do not automatically grant Create or Import.
-
-### Host bootstrap and recovery
-
-`COCKLEBUR_BOOTSTRAP_KEY` is a one-time bootstrap credential. The intended Host uses **Claim Host** once. Cocklebur then creates application-level Host state inside the persistent data volume and shows a Host recovery code.
-
-After claim, the bootstrap key is **not accepted as a standing Host password**. A new browser uses the current Host recovery code; successful recovery preserves existing Host sessions and rotates the recovery code.
-
-The underlying infrastructure administrator still controls the server/storage and therefore remains technically capable of accessing or destroying self-hosted data. Cocklebur app permissions do not claim to restrict server root/admin access.
+A project role does not automatically grant Host access.
 
 ## Main features
 
-- Projects with optional expected end dates
-- Dashboard and announcements
-- To-do and Event Cards
-- Checklists, tags, assignees, visibility and edit-access controls
-- Discussion channels with titled threads
-- Project files
-- Owner / Member / Viewer project roles
-- Invitation and recovery flows
-- Instance Create / Import delegation
-- Portable project export / import
+### Projects
+- Create/import projects through Host access.
+- Active / closing / archived lifecycle.
+- Optional expected end date.
+- Export/import portable project packs.
+
+### Cards
+- To-do and Event cards.
+- Pending / In Progress / Done / Archived status.
+- Markdown content, tags, assignees, checklist items, dates, and `.ics` download for dated Events.
+- **Visibility:** `Everyone` or `Only me`.
+- **Edit access:** shared or creator-only.
+- Assignees describe responsibility; they do not grant or restrict access.
+- Delete is creator-only for both To-do and Event cards.
+- Human-readable audit history records who changed content, status, schedule, and checklist items.
+
+### Announcements, Discussion, Files
+- Project announcements.
+- Channels, titled threads, replies, and channel visibility by role/person.
+- File upload/download with metadata, size/quota limits, SHA-256 digest, and optional Card links.
+
+### Recovery
+- Owners can generate one-time recovery links for existing collaborators.
+- Opening a recovery link first shows a confirmation page; the token is consumed only when recovery is confirmed.
+- Recovery restores the existing identity and **does not revoke other valid browser sessions**.
+- Owners also have a break-glass recovery code. Successful Owner recovery rotates that code.
 
 ## Data and privacy
 
-Self-hosted Cocklebur does not require a central Cocklebur project-data service operated by Herboratory. Project data lives in storage controlled by the deployment administrator.
+Self-hosted Cocklebur does not require a central project-data service operated by the software author. Project data lives in the storage controlled by the deployer. This is a technical architecture statement, not a waiver of privacy, security, or legal responsibilities.
 
 For Internet-facing use:
 
 - use HTTPS;
 - keep one app worker;
-- do not expose the raw Docker port directly;
+- do not expose the raw Docker port publicly;
 - back up the persistent data volume;
-- protect bootstrap/recovery credentials, invite links, and Owner recovery codes.
+- protect the Host key, invite links, recovery links, and Owner recovery codes.
 
-See `SECURITY.md` and `DEPLOY_SERVER.md`.
+See `SECURITY.md`.
+
+## Documentation
+
+- `DEPLOY_SERVER.md` — deployment, clean reset, tunnels, and Host access
+- `USER_GUIDE.md` / `USER_GUIDE_zh-Hant.md` — day-to-day use
+- `BACKUP_RESTORE.md` — backup and restore
+- `UPDATE.md` — safe updates
+- `EXPORT_FORMAT.md` — portable project-pack format
+- `SECURITY.md` — security model
+- `RELEASE.md` — release metadata and limitations
+- `CHANGELOG.md` — project history
+- `LICENSE` — license terms
+
+## Release validation
+
+A lightweight source-package guard is included:
+
+```bash
+python scripts/package_guard.py
+```
+
+It checks required server-release files, rejects runtime secrets/project data/caches, and validates Python/JavaScript syntax when the relevant tools are available.
+
+
+## Server 0.2.17
+
+Adds Workspace Bundle export/import, Note Cards, retry-safe Card creation, New Project spacing polish, and Host-only data-safe Update Center staging. Project Pack format remains 1.0.

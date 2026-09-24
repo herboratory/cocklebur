@@ -1,35 +1,32 @@
-# Security Notes
+# Cocklebur Server Security Notes
 
-## Trust boundaries
+## Access model
 
-Cocklebur separates three layers:
-
-1. **Infrastructure Admin / Deployer** — controls the host machine, Docker, storage, backups and network.
-2. **Instance Host / delegated instance permissions** — controls Cocklebur-level Create / Import authorization.
-3. **Project roles** — Owner / Member / Viewer inside individual projects.
-
-Infrastructure administrators are not automatically assigned a Cocklebur app role. However, server/root/storage administrators are technically capable of reading, altering, restoring or deleting self-hosted data. Application permissions cannot override control of the underlying infrastructure.
-
-## Host bootstrap
-
-The configured bootstrap key is accepted only while the Cocklebur instance is unclaimed. Claiming Host creates persistent Host auth state under `/data` and issues a Host recovery code. After claim, bootstrap-key login is rejected.
-
-Host recovery preserves existing valid Host sessions and rotates the recovery code.
-
-## Delegated instance permissions
-
-Create and Import can be granted independently to an existing project identity. The server validates those permissions against that identity's project-scoped HttpOnly browser credential. Removing the project identity removes its associated instance grant.
-
-Instance permissions are installation-specific and are **not exported inside project packs**.
+- Server project membership uses project-scoped browser credentials stored in `HttpOnly` cookies.
+- Instance-level **Host access** controls Create / Import and is separate from project Owner / Member / Viewer roles.
+- Invite tokens should be treated as secrets until exchanged for membership.
+- Recovery links are one-time. Opening the link only shows confirmation; the token is consumed on confirmed recovery.
+- Recovery restores the existing identity and does **not** revoke other valid sessions.
+- Owner break-glass recovery codes rotate after successful use.
+- Cookies are marked `Secure` when `POPUP_BASE_URL` uses HTTPS.
+- Optional project PINs add friction but do not replace HTTPS or proper access controls.
 
 ## Deployment
 
-- Use HTTPS for Internet-facing deployments.
-- Do not expose the raw Docker port publicly.
-- Run exactly one application worker.
-- Keep `/data` persistent and backed up.
-- Protect bootstrap keys, Host/Owner recovery codes, invite/recovery links and project cookies.
+For Internet-facing use:
+
+- terminate HTTPS in front of Cocklebur;
+- keep the application port bound to localhost/private infrastructure;
+- run exactly **one application worker**;
+- protect the host machine and persistent data volume;
+- keep `COCKLEBUR_HOST_KEY`, `POPUP_SECRET_KEY`, invite/recovery links, and recovery codes private.
+
+The JSON/JSONL storage layer uses filesystem locking and assumes a single application writer process. The provided Docker command uses one worker.
+
+## Data handling
+
+Self-hosted mode does not require a central project-data service operated by the software author. Project content stays in storage selected by the deployer. This does not remove privacy, security, retention, consent, or other legal obligations that may apply to a deployment.
 
 ## Reporting a security issue
 
-Do not publish live credentials, private project data or exploit details in a public issue.
+Do not publish live exploits, credentials, or private project data. Report security issues privately to the project maintainer with reproducible steps where possible.

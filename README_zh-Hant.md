@@ -1,38 +1,43 @@
-# Cocklebur Server
+# Cocklebur Server — MVP
 
-**版本：** `0.2.16`  
+**版本：** `PW-MVP-01-FINAL / 0.2.15-mvp`  
 **Project pack format：** `1.0`
 
-Cocklebur Server 是一個輕量、self-hosted 的專案工作空間：一個 project 維持一份 canonical live copy，專案結束後可以把整包資料 export 帶走。
+Cocklebur Server 是一個輕量、可自行部署的 project workspace。核心原則是：**一個 project 同時間只有一份 canonical live copy**；大家在同一個 server project 上工作，結束時可以把整個 project 匯出成可攜 ZIP 帶走。
 
-這個 archive 是 **Server distribution**，不包含 Desktop build tooling。
+這個壓縮包是 **Server 發布版**，已移除 Local / pywebview / Tauri desktop build 工具，以及 H2～H16 等舊驗收與 hotfix 文件。
 
-## 核心模型
+Cocklebur 用於 **個人、學術/研究、教學/教育、非商業社群**情境；不授予商業使用權，詳見 `LICENSE`。
 
-- 每個 active project 一份 canonical server copy。
-- JSON / JSONL + 原始 files 作為資料本體。
-- 不做 CRDT、offline multi-master sync 或偷偷 merge。
-- Stale write 回 HTTP `409`。
-- Export 同時包含 machine-readable data、human-readable text 與原始 files。
-- Server 必須只跑 **一個 application worker**。
+## 核心設計
 
-## Docker 快速開始
+- 一個 project 只有一份 active canonical server copy。
+- 資料使用 JSON / JSONL + 原始 files，並非綁死在 proprietary database。
+- 不做 CRDT、offline multi-master sync 或 silent auto-merge。
+- 可變更資料有 version；拿舊版本 Save 時回 HTTP `409`，不會偷偷覆蓋較新的內容。
+- Export 會做一致性 snapshot，包含 machine-readable data、human-readable text 與原始 files。
+- Server 必須維持 **單一 application worker**。
+
+## Docker 快速啟動
 
 ```bash
 cp .env.example .env
 ```
 
-本機測試可設定：
+本機測試可先維持：
 
 ```dotenv
 POPUP_APP_MODE=server
 POPUP_DATA_DIR=/data
 POPUP_HOST_PORT=8000
 POPUP_BASE_URL=http://127.0.0.1:8000
-COCKLEBUR_BOOTSTRAP_KEY=換成一個夠長的隨機 secret
 ```
 
-舊的 `COCKLEBUR_HOST_KEY` 名稱仍相容，會被當成 bootstrap key。
+穩定部署建議另外設定一組長而隨機的 Host key：
+
+```dotenv
+COCKLEBUR_HOST_KEY=換成你自己的長隨機secret
+```
 
 啟動：
 
@@ -41,42 +46,75 @@ docker compose up -d --build
 curl http://127.0.0.1:8000/health
 ```
 
+本機測試開 `http://127.0.0.1:8000`。若要公開到 Internet，保留 Cocklebur 只 bind localhost，前面再放 HTTPS reverse proxy / tunnel。詳細看 `DEPLOY_SERVER.md`。
+
 ## 權限模型
 
-Cocklebur 把 infrastructure、instance 與 project 三個層級分開：
+Cocklebur 把 **Server Host** 和 **project role** 分開：
 
-- **Infrastructure Admin / Deployer**：管理主機、Docker、storage、backup、network；這不是 Cocklebur app role。
-- **Host**：管理整個 Cocklebur instance。
-- **Owner**：管理某一個 project。
-- **Member**：一般 project 協作。
-- **Viewer**：project content 唯讀，但可改自己的 display name。
+- **Host**：可在這個 Cocklebur instance 建立 / Import project。
+- **Owner**：管理某個 project、邀請、角色、recovery、export / close / delete。
+- **Member**：正常協作。
+- **Viewer**：project 內容唯讀；仍可修改自己的 display name。
 
-另外，某個既有 project identity 可以被 Host 額外授權：
-
-- **Create projects**：可建立新 project；建立後自動成為該 project Owner。
-- **Import project packs**：可 import project pack；成功後取得 imported project 的 Owner access。
-
-Owner / Member / Viewer 本身不會自動得到 Create / Import。
-
-### Host bootstrap 與 recovery
-
-`COCKLEBUR_BOOTSTRAP_KEY` 是一次性的 bootstrap credential。指定的 Host 第一次在 Projects 頁按 **Claim Host**，輸入 bootstrap key 後，Cocklebur 會把真正的 Host state 寫進 persistent `/data`，並顯示 Host recovery code。
-
-完成 claim 後，bootstrap key **不再是 Host 登入密碼**。新的 browser 必須用目前的 Host recovery code；成功 recovery 後舊 Host browser session 不會被踢掉，但 recovery code 會 rotate。
-
-Infrastructure Admin 仍然掌握底層 server/storage，因此技術上始終能讀、改、刪 self-hosted data。Cocklebur 的 app 權限不會假裝能限制 server root/admin。
+Project Owner / Member / Viewer 並不會因此取得 Host 權限。
 
 ## 主要功能
 
-- Projects + expected end date
-- Dashboard / announcements
-- To-do / Event Cards
-- Checklist、tags、assignees、visibility、edit access
-- Discussion channels + titled threads
-- Project files
-- Owner / Member / Viewer
-- Invitation / recovery
-- Instance-level Create / Import delegation
-- Portable project export / import
+### Cards
+- To-do / Event。
+- Pending / In Progress / Done / Archived。
+- Markdown、tags、assignees、checklist、日期與 Event `.ics`。
+- **Visibility：** `Everyone` / `Only me`。
+- **Edit access：** Shared / creator-only。
+- Assignee 只代表責任歸屬，不控制權限。
+- To-do / Event 都只有原 creator 能 Delete。
+- Card 內會顯示人類可讀的 activity，例如 `Bob completed “Book venue”`，不會把 `card.created` 這種 backend key 直接丟給使用者。
 
-公開到 Internet 時請使用 HTTPS、保留 persistent volume、只跑一個 worker，並保護 bootstrap/recovery credential、invite links 與 Owner recovery codes。
+### Announcements / Discussion / Files
+- Project announcements。
+- Channels、帶標題的 threads、replies，以及依角色/人員控制 channel visibility。
+- File upload/download、metadata、size/quota、SHA-256 與 Card links。
+
+### Recovery
+- Owner 可為既有 collaborator 產生一次性 recovery link。
+- GET 打開 recovery link 只會進確認頁；真正確認 recovery 時才 consume token，避免 preview/prefetch 把 link 吃掉。
+- Recovery 會恢復原 identity，**不會踢掉其他仍然有效的 browser sessions**。
+- Owner 另有 break-glass recovery code；成功使用後會 rotate 成新 code。
+
+## 資料與隱私
+
+Self-hosted Cocklebur 不要求把 project data 放到軟體作者營運的中央資料服務；資料由部署者自己控制 storage。這只是技術架構描述，不代表部署者沒有隱私、安全或法律責任。
+
+Internet-facing deployment 請：
+
+- 使用 HTTPS；
+- 維持單一 app worker；
+- 不要把 raw Docker port 直接公開到 Internet；
+- 備份 persistent volume；
+- 保護 Host key、invite link、recovery link 與 Owner recovery code。
+
+## 文件
+
+- `DEPLOY_SERVER.md` — Server 部署、乾淨重建、tunnel、Host access
+- `USER_GUIDE.md` / `USER_GUIDE_zh-Hant.md` — 使用方法
+- `BACKUP_RESTORE.md` — 備份 / 還原
+- `UPDATE.md` — 安全更新
+- `EXPORT_FORMAT.md` — project pack 格式
+- `SECURITY.md` — security model
+- `RELEASE.md` — release metadata / limitations
+- `CHANGELOG.md` — 歷史變更
+- `LICENSE` — license
+
+## Package sanity check
+
+```bash
+python scripts/package_guard.py
+```
+
+它會檢查 Server 發布必需檔案、拒絕 runtime secrets / project data / cache，並在工具可用時做 Python / JavaScript syntax validation。
+
+
+## Server 0.2.17
+
+Adds Workspace Bundle export/import, Note Cards, retry-safe Card creation, New Project spacing polish, and Host-only data-safe Update Center staging. Project Pack format remains 1.0.

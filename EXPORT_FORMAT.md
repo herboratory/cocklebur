@@ -34,3 +34,25 @@ Import validates ZIP paths, required files, format version, and checksums before
 ## Canonical-copy rule
 
 An exported pack is a snapshot, not a synchronized writable replica. Importing it creates a new canonical instance in the current deployment. Do not continue editing both the old and restored copies and expect them to merge.
+
+
+## Server 0.2.17 additions
+
+### Notes
+
+Notes remain ordinary Card JSON under `data/cards/` with `type: "note"`. Human-readable exports additionally include `readable/notes.txt`; `readable/tasks-and-events.txt` keeps its legacy name for pack-format 1.0 compatibility.
+
+### Workspace Bundle 1.0
+
+A Workspace Bundle is only a container of ordinary Project Pack 1.0 ZIPs:
+
+```text
+Cocklebur_Workspace_*.zip
+├─ bundle-manifest.json
+├─ checksums.json
+└─ projects/
+   ├─ p_....zip
+   └─ p_....zip
+```
+
+Each nested Project Pack is validated with the normal path/checksum/schema rules before import.

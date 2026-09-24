@@ -29,7 +29,7 @@ class ProjectPatch(BaseModel):
 
 
 class CardCreate(BaseModel):
-    type: Literal["task", "event"] = "task"
+    type: Literal["task", "event", "note"] = "task"
     title: str = Field(min_length=1, max_length=240)
     status: str = "todo"
     start: str | None = None
@@ -46,7 +46,7 @@ class CardCreate(BaseModel):
 
 class CardPatch(BaseModel):
     expected_version: int
-    type: Literal["task", "event"] | None = None
+    type: Literal["task", "event", "note"] | None = None
     title: str | None = Field(default=None, min_length=1, max_length=240)
     status: str | None = None
     start: str | None = None
@@ -117,17 +117,16 @@ class SelfPatch(BaseModel):
 
 class HostLogin(BaseModel):
     key: str = Field(min_length=1, max_length=500)
-    display_name: str = Field(default="Host", min_length=1, max_length=100)
-
-
-class HostRecover(BaseModel):
-    code: str = Field(min_length=8, max_length=200)
-
-
-class InstancePermissionPatch(BaseModel):
-    can_create_projects: bool = False
-    can_import_projects: bool = False
 
 
 class OwnerRecover(BaseModel):
     code: str = Field(min_length=8, max_length=200)
+
+
+class WorkspaceImportCommit(BaseModel):
+    batch_id: str = Field(min_length=8, max_length=120)
+    duplicate_policy: Literal["skip", "new_id"] = "skip"
+
+
+class UpdateStageCommit(BaseModel):
+    stage_id: str = Field(min_length=8, max_length=120)

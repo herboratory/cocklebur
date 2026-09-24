@@ -54,10 +54,14 @@
   }
   async function api(url, opts={}) {
     const cfg={credentials:'same-origin', ...opts};
+    const timeoutMs=Number(cfg.timeoutMs||0); delete cfg.timeoutMs;
+    let timer=null;
+    if(timeoutMs>0 && !cfg.signal){const controller=new AbortController();cfg.signal=controller.signal;timer=setTimeout(()=>controller.abort(),timeoutMs);}
     if(cfg.body && !(cfg.body instanceof FormData) && typeof cfg.body !== 'string') {
       cfg.headers={...cfg.headers,'Content-Type':'application/json'}; cfg.body=JSON.stringify(cfg.body);
     }
-    const r=await fetch(url,cfg);
+    let r;
+    try{r=await fetch(url,cfg);}catch(err){if(err?.name==='AbortError'){const e=new Error('Request timed out');e.code='TIMEOUT';throw e;}throw err;}finally{if(timer)clearTimeout(timer);}
     if(!r.ok){ let d={}; try{d=await r.json();}catch{} const e=new Error(d.detail||`${r.status} ${r.statusText}`); e.status=r.status; e.data=d; throw e; }
     const ct=r.headers.get('content-type')||''; return ct.includes('application/json') ? r.json() : r;
   }
@@ -72,22 +76,10 @@
     try{ await navigator.clipboard.writeText(text); toast('Copied'); }
     catch{ const ta=document.createElement('textarea'); ta.value=text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); toast('Copied'); }
   }
-  function hasPywebviewBridge(){ return Boolean(window.pywebview?.api?.save_url); }
-  function hasTauriBridge(){ return Boolean(window.__TAURI__?.core?.invoke); }
-  function isDesktopBridge(){ return hasPywebviewBridge() || hasTauriBridge(); }
-  async function desktopChooseFolder(){
-    if(hasTauriBridge()) return window.__TAURI__.core.invoke('choose_folder');
-    if(window.pywebview?.api?.choose_folder) return window.pywebview.api.choose_folder();
-    return null;
-  }
-  async function desktopSaveUrl(url, suggestedName='download'){
-    if(hasTauriBridge()) return window.__TAURI__.core.invoke('save_url',{relativeUrl:url,suggestedName});
-    if(window.pywebview?.api?.save_url) return window.pywebview.api.save_url(url, suggestedName);
-    return null;
-  }
+  function isDesktopBridge(){ return Boolean(window.pywebview?.api?.save_url); }
   async function downloadResource(url, suggestedName='download'){
     if(isDesktopBridge()){
-      try{ const saved=await desktopSaveUrl(url, suggestedName); if(saved) toast(`Saved to ${saved}`); return Boolean(saved); }
+      try{ const saved=await window.pywebview.api.save_url(url, suggestedName); if(saved) toast(`Saved to ${saved}`); return Boolean(saved); }
       catch(err){ toast(`Could not save file: ${err.message||err}`, true); return false; }
     }
     try{
@@ -136,79 +128,34 @@
     $('#continueAfterRecovery').onclick=()=>{closeDialog();onContinue?.();};
   }
 
-  function showHostRecoveryCodeDialog(result, onContinue){
-    const code=result?.host_recovery_code;
-    if(!code){onContinue?.();return;}
-    openDialog(`${dialogHeader('INSTANCE HOST','Save your Host recovery code')}<div class="banner warn"><strong>This code recovers Instance Host access on another browser.</strong><br>The bootstrap key is not accepted after the instance has been claimed. Save this code somewhere safe; recovery rotates it.</div><label>Host recovery code<input id="hostRecoveryCodeValue" value="${esc(code)}" readonly></label><div class="modal-actions"><button type="button" class="btn secondary" id="copyHostRecoveryCode">Copy code</button><button type="button" class="btn" id="continueAfterHostRecovery">I saved it</button></div>`);
-    $('#copyHostRecoveryCode').onclick=()=>copyText(code);
-    $('#continueAfterHostRecovery').onclick=()=>{closeDialog();onContinue?.();};
-  }
-
   async function initHome(){
     const mode=document.body.dataset.mode;
-    let access={host:mode!=='server',host_claimed:mode!=='server',can_create_projects:true,can_import_projects:true,sources:[]};
+    let host=mode!=='server';
     const projectDialog=$('#projectDialog'), projectForm=$('#projectForm');
     const modeSelect=$('#projectForm select[name=mode]');
-    const updateStorageVisibility=()=>{const row=$('#customStorageRow');if(row)row.hidden=!(mode==='local'&&modeSelect.value==='local'&&(hasTauriBridge()||window.pywebview?.api?.choose_folder));};
-    const applyInstanceUI=()=>{
-      $$('.host-admin-only').forEach(el=>el.style.display=access.host?'':'none');
-      $$('.create-permission').forEach(el=>el.style.display=access.can_create_projects?'':'none');
-      $$('.import-permission').forEach(el=>el.style.display=access.can_import_projects?'':'none');
-      const btn=$('#hostAccessBtn');
-      if(btn)btn.textContent=access.host?'Host access ✓':access.host_claimed?'Host recovery':'Claim Host';
-      if(mode==='local'){
-        $('#modeNotice').textContent='Local mode — project data stays on this machine unless you export or share it.';
-      }else if(access.host){
-        $('#modeNotice').textContent='Server mode — Instance Host access is enabled. Host can manage instance permissions; project roles remain separate.';
-      }else if(access.can_create_projects||access.can_import_projects){
-        const caps=[access.can_create_projects?'Create projects':'',access.can_import_projects?'Import packs':''].filter(Boolean).join(' + ');
-        $('#modeNotice').textContent=`Server mode — delegated instance permission enabled: ${caps}. Your Owner/Member/Viewer roles remain project-specific.`;
-      }else{
-        $('#modeNotice').textContent='Server mode — open an invitation or recover project access. Creating or importing projects requires an instance permission.';
-      }
+    const updateStorageVisibility=()=>{const row=$('#customStorageRow');if(row)row.hidden=!(mode==='local'&&modeSelect.value==='local'&&window.pywebview?.api?.choose_folder);};
+    const applyHostUI=()=>{
+      $$('.host-only').forEach(el=>el.style.display=host?'':'none');
+      const btn=$('#hostAccessBtn'); if(btn)btn.textContent=host?'Host access ✓':'Host access';
+      $('#modeNotice').textContent=mode==='local'
+        ?'Local mode — project data stays on this machine unless you export or share it.'
+        :host?'Server mode — Host access is enabled in this browser.':'Server mode — collaborators can only open projects they have joined. Creating or importing projects requires Host access.';
     };
-    const refreshAccess=async()=>{
-      if(mode!=='server'){applyInstanceUI();return access;}
-      try{access=await api('/api/instance/access');}catch{access={host:false,host_claimed:false,can_create_projects:false,can_import_projects:false,sources:[]};}
-      applyInstanceUI();return access;
-    };
-    await refreshAccess();
+    if(mode==='server'){
+      try{host=Boolean((await api('/api/host/status')).host);}catch{host=false;}
+    }
+    applyHostUI();
 
     $('#newProjectBtn').onclick=()=>projectDialog.showModal();
     $$('.project-dialog-cancel',projectDialog).forEach(b=>b.onclick=()=>projectDialog.close());
-    const bindFolderPicker=()=>{updateStorageVisibility();const b=$('#chooseFolderBtn');if(b&&(hasTauriBridge()||window.pywebview?.api?.choose_folder))b.onclick=async()=>{try{const path=await desktopChooseFolder();if(path)$('#storagePath').value=path;}catch(err){toast(`Could not open folder picker: ${err.message||err}`,true);}};};
-    modeSelect.addEventListener('change',updateStorageVisibility); bindFolderPicker();
-    window.addEventListener('pywebviewready',bindFolderPicker);
+    modeSelect.addEventListener('change',updateStorageVisibility); updateStorageVisibility();
+    window.addEventListener('pywebviewready',()=>{updateStorageVisibility();const b=$('#chooseFolderBtn');if(b)b.onclick=async()=>{try{const path=await window.pywebview.api.choose_folder();if(path)$('#storagePath').value=path;}catch{toast('Could not open folder picker',true);}};});
 
-    const openHostPanel=async()=>{
-      if(access.host){
-        let status={};try{status=await api('/api/host/status');}catch{}
-        const name=status.host_profile?.display_name||'Host';
-        openDialog(`${dialogHeader('INSTANCE HOST','Host access')}<div class="banner"><strong>${esc(name)}</strong><br>Host manages the Cocklebur instance. Project ownership remains separate.</div><div class="form-stack"><button type="button" class="btn secondary" id="rotateHostRecoveryBtn">Generate new Host recovery code</button><button type="button" class="btn secondary" id="openInstancePermissionsFromHost">Manage instance permissions</button></div><div class="modal-actions"><button type="button" class="btn secondary" data-close-dialog>Close</button><button type="button" class="btn danger" id="hostLogoutBtn">Sign out Host access</button></div>`);
-        $('#rotateHostRecoveryBtn').onclick=async()=>{try{const r=await api('/api/host/recovery/rotate',{method:'POST'});showHostRecoveryCodeDialog(r,()=>refreshAccess());}catch(err){toast(err.message,true);}};
-        $('#openInstancePermissionsFromHost').onclick=()=>{closeDialog();openInstancePermissions();};
-        $('#hostLogoutBtn').onclick=async()=>{try{await api('/api/host/logout',{method:'POST'});closeDialog();await refreshAccess();toast('Host access signed out');}catch(err){toast(err.message,true);}};
-        return;
-      }
-      if(!access.host_claimed){
-        openDialog(`${dialogHeader('INSTANCE HOST','Claim this Cocklebur instance')}<p class="muted">The deployment bootstrap key is used once to designate the application-level Host. After claim, the bootstrap key no longer grants Host access.</p><form id="hostClaimForm" class="form-stack"><label>Host display name<input name="display_name" maxlength="100" value="Host" required></label><label>Bootstrap key<input name="key" type="password" autocomplete="off" required></label><div class="modal-actions"><button type="button" class="btn secondary" data-close-dialog>Cancel</button><button class="btn">Claim Host</button></div></form>`);
-        $('#hostClaimForm').onsubmit=async e=>{e.preventDefault();const fd=new FormData(e.currentTarget);try{const r=await api('/api/host/login',{method:'POST',body:{key:String(fd.get('key')||''),display_name:String(fd.get('display_name')||'Host')}});closeDialog();await refreshAccess();showHostRecoveryCodeDialog(r,()=>refreshAccess());}catch(err){toast(err.message,true);}};
-      }else{
-        openDialog(`${dialogHeader('INSTANCE HOST','Recover Host access')}<div class="banner warn"><strong>The bootstrap key is disabled after Host claim.</strong><br>Use the current Host recovery code on a new browser. Successful recovery keeps existing Host sessions and rotates the code.</div><form id="hostRecoverForm" class="form-stack"><label>Host recovery code<input name="code" autocomplete="off" placeholder="XXXXX-XXXXX-XXXXX-XXXXX" required autofocus></label><div class="modal-actions"><button type="button" class="btn secondary" data-close-dialog>Cancel</button><button class="btn">Recover Host access</button></div></form>`);
-        $('#hostRecoverForm').onsubmit=async e=>{e.preventDefault();try{const r=await api('/api/host/recover',{method:'POST',body:{code:String(new FormData(e.currentTarget).get('code')||'')}});closeDialog();await refreshAccess();showHostRecoveryCodeDialog(r,()=>refreshAccess());}catch(err){toast(err.message,true);}};
-      }
-    };
-    $('#hostAccessBtn')?.addEventListener('click',openHostPanel);
-
-    async function openInstancePermissions(){
-      try{
-        const people=await api('/api/instance/people');
-        const body=people.length?people.map(p=>`<div class="instance-person-row" data-project-id="${esc(p.project_id)}" data-person-id="${esc(p.person_id)}"><div class="instance-person-main"><strong>${esc(p.display_name)}</strong><span>${esc(p.project_name)} · ${esc(p.role)}</span></div><label class="instance-cap"><input type="checkbox" data-cap="create" ${p.can_create_projects?'checked':''}> Create</label><label class="instance-cap"><input type="checkbox" data-cap="import" ${p.can_import_projects?'checked':''}> Import</label><button class="btn compact secondary instance-cap-save" type="button">Save</button></div>`).join(''):'<div class="empty">No project identities exist yet. People appear here after they join or own a Server project.</div>';
-        openDialog(`${dialogHeader('INSTANCE','Instance permissions')}<p class="muted">Create / Import are instance-level capabilities added on top of a person’s project role. Granting them does not make that person Host or Owner of other projects.</p><div class="banner"><strong>Host</strong> always has Create + Import. Infrastructure administrators are outside Cocklebur’s app roles.</div><div class="instance-people-list">${body}</div><div class="modal-actions"><button type="button" class="btn secondary" data-close-dialog>Close</button></div>`);
-        $$('.instance-cap-save').forEach(btn=>btn.onclick=async()=>{const row=btn.closest('.instance-person-row'),projectId=row.dataset.projectId,personId=row.dataset.personId;const canCreate=$('[data-cap="create"]',row).checked,canImport=$('[data-cap="import"]',row).checked;try{await api(`/api/instance/people/${encodeURIComponent(projectId)}/${encodeURIComponent(personId)}/permissions`,{method:'PATCH',body:{can_create_projects:canCreate,can_import_projects:canImport}});toast('Instance permissions updated');}catch(err){toast(err.message,true);}});
-      }catch(err){toast(err.message,true);}
-    }
-    $('#instancePermissionsBtn')?.addEventListener('click',openInstancePermissions);
+    $('#hostAccessBtn')?.addEventListener('click',()=>{
+      if(host){toast('Host access is already enabled');return;}
+      openDialog(`${dialogHeader('SERVER HOST','Unlock project creation')}<p class="muted">Enter the Host key for this Cocklebur server. This is separate from project Owner/Member roles.</p><form id="hostLoginForm" class="form-stack"><label>Host key<input name="key" type="password" autocomplete="off" required autofocus></label><div class="modal-actions"><button type="button" class="btn secondary" data-close-dialog>Cancel</button><button class="btn">Unlock Host access</button></div></form>`);
+      $('#hostLoginForm').onsubmit=async e=>{e.preventDefault();try{await api('/api/host/login',{method:'POST',body:{key:new FormData(e.currentTarget).get('key')}});host=true;applyHostUI();closeDialog();toast('Host access enabled');}catch(err){toast(err.message,true);}};
+    });
 
     $('#ownerRecoveryBtn')?.addEventListener('click',()=>{
       const remembered=JSON.parse(lsGet('pw_projects','[]'));
@@ -216,16 +163,43 @@
       $('#ownerRecoverHomeForm').onsubmit=async e=>{e.preventDefault();const fd=new FormData(e.currentTarget),projectId=String(fd.get('project_id')||'').trim();try{const r=await api(`/api/projects/${encodeURIComponent(projectId)}/owner-recover`,{method:'POST',body:{code:String(fd.get('code')||'').trim()}});rememberProject(projectId);showRecoveryCodeDialog({...r,owner_recovery_code:r.owner_recovery_code},()=>location.href=`/project/${projectId}`);}catch(err){toast(err.message,true);}};
     });
 
-    projectForm.addEventListener('submit',async e=>{e.preventDefault();const fd=new FormData(e.currentTarget),body=Object.fromEntries(fd.entries());body.expiry=body.expiry||null;try{const p=await api('/api/projects',{method:'POST',body});rememberProject(p.id);projectDialog.close();showRecoveryCodeDialog(p,()=>location.href=`/project/${p.id}`);}catch(err){toast(err.message,true);}});
+    projectForm.addEventListener('submit',async e=>{e.preventDefault();const submit=e.currentTarget.querySelector('[type=submit]');if(submit?.disabled)return;const oldText=submit?.textContent;if(submit){submit.disabled=true;submit.textContent='Creating…';}const fd=new FormData(e.currentTarget),body=Object.fromEntries(fd.entries());body.expiry=body.expiry||null;try{const p=await api('/api/projects',{method:'POST',body,timeoutMs:30000});rememberProject(p.id);projectDialog.close();showRecoveryCodeDialog(p,()=>location.href=`/project/${p.id}`);}catch(err){toast(err.message,true);}finally{if(submit){submit.disabled=false;submit.textContent=oldText||'Create project';}}});
+
+    $('#exportBundleBtn')?.addEventListener('click',async()=>{const btn=$('#exportBundleBtn');if(btn.disabled)return;const old=btn.textContent;btn.disabled=true;btn.textContent='Packing…';try{await downloadResource('/api/projects/export-bundle','Cocklebur_Workspace.zip');toast('Workspace Bundle ready');}catch(err){toast(err.message||'Could not export workspace',true);}finally{btn.disabled=false;btn.textContent=old;}});
+
+    function showBatchImportResults(results){
+      const imported=(results||[]).filter(x=>x.result==='imported'); imported.forEach(x=>x.imported_project_id&&rememberProject(x.imported_project_id));
+      const recovery=imported.filter(x=>x.owner_recovery_code);
+      const body=imported.length?imported.map(x=>`<div class="import-preflight-row"><div class="import-preflight-main"><strong>${esc(x.project_name||x.imported_project_id||'Project')}</strong><span>${esc(x.imported_project_id||'')}</span>${x.owner_recovery_code?`<span><strong>Owner recovery:</strong> <code>${esc(x.owner_recovery_code)}</code></span>`:''}</div><span class="import-status">Imported</span></div>`).join(''):'<div class="empty">No projects were imported.</div>';
+      openDialog(`${dialogHeader('IMPORT','Import complete')}<div class="${recovery.length?'banner warn':'banner'}">${recovery.length?'<strong>Save every Owner recovery code below.</strong> Cocklebur cannot show the same code again.':'Import finished.'}</div><div class="import-preflight-list">${body}</div><div class="modal-actions"><button class="btn" id="finishBatchImport">Done</button></div>`);
+      $('#finishBatchImport').onclick=()=>{closeDialog();loadProjects();};
+    }
+    function renderImportPreflight(pre){
+      const entries=pre.entries||[],dupes=entries.filter(x=>x.status==='Duplicate ID').length,ready=entries.filter(x=>x.status==='Ready').length;
+      const rows=entries.map(x=>{const bad=!['Ready','Duplicate ID'].includes(x.status);return `<div class="import-preflight-row"><div class="import-preflight-main"><strong>${esc(x.project_name||x.source_name||'Unknown project')}</strong><span>${esc(x.project_id||x.detail||x.source_name||'')}</span></div><span class="import-status ${bad?'bad':''}">${esc(x.status||'Unknown')}</span></div>`;}).join('')||'<div class="empty">No projects found.</div>';
+      const duplicateChoice=dupes?`<label>Duplicate IDs<select id="duplicateImportPolicy"><option value="skip">Skip existing projects</option><option value="new_id">Import as new project IDs</option></select></label>`:'';
+      openDialog(`${dialogHeader('IMPORT','Review import')}<p class="muted">Cocklebur validates every Project Pack before importing. Workspace Bundles are unpacked into their contained Project Packs first.</p><div class="import-preflight-list">${rows}</div>${duplicateChoice}<div class="modal-actions"><button type="button" class="btn secondary" data-close-dialog>Cancel</button><button class="btn" id="commitBatchImport" ${ready+dupes?'':'disabled'}>Import ${ready+dupes} project${ready+dupes===1?'':'s'}</button></div>`);
+      $('#commitBatchImport')?.addEventListener('click',async()=>{const btn=$('#commitBatchImport');if(btn.disabled)return;const old=btn.textContent;btn.disabled=true;btn.textContent='Importing…';try{const r=await api('/api/projects/import/commit',{method:'POST',body:{batch_id:pre.batch_id,duplicate_policy:$('#duplicateImportPolicy')?.value||'skip'},timeoutMs:120000});showBatchImportResults(r.results);}catch(err){btn.disabled=false;btn.textContent=old;toast(err.message,true);}});
+    }
     $('#importBtn').onclick=()=>{const input=$('#importFile');input.value='';input.click();};
-    $('#importFile').onchange=async()=>{const input=$('#importFile'),f=input.files[0];if(!f)return;const fd=new FormData();fd.append('file',f);try{const p=await api('/api/projects/import',{method:'POST',body:fd});rememberProject(p.id);toast('Project imported');showRecoveryCodeDialog(p,()=>location.href=`/project/${p.id}`);}catch(err){toast(err.message,true);}finally{input.value='';}};
+    $('#importFile').onchange=async()=>{const input=$('#importFile'),files=[...input.files];if(!files.length)return;const fd=new FormData();files.forEach(f=>fd.append('files',f));try{const pre=await api('/api/projects/import/preflight',{method:'POST',body:fd,timeoutMs:120000});renderImportPreflight(pre);}catch(err){toast(err.message,true);}finally{input.value='';}};
+
+    async function openUpdateCenter(){
+      let status;try{status=await api('/api/update/status');}catch(err){toast(err.message,true);return;}
+      const staged=status.staged;const manifest=staged?.manifest||{};
+      openDialog(`${dialogHeader('SERVER','Update center')}<div class="banner"><strong>Data-safe staging only.</strong><br>This screen validates an update package, creates a pre-update data backup, and stages files. It does not give the web app Docker/Kubernetes control and does not restart the server.</div><div class="update-summary"><div class="update-summary-row"><span>Current version</span><strong>${esc(status.current_version||'—')}</strong></div>${staged?`<div class="update-summary-row"><span>Staged target</span><strong>${esc(manifest.target_version||'—')}</strong></div><div class="update-summary-row"><span>Minimum source</span><strong>${esc(manifest.minimum_source_version||'—')}</strong></div><div class="update-path">Backup: ${esc(staged.backup_path||'')}</div><div class="update-path">Stage: ${esc(staged.payload_path||'')}</div>`:''}</div><label>Update package (.zip)<input id="serverUpdateFile" type="file" accept=".zip"></label><div class="modal-actions">${staged?'<button type="button" class="btn secondary" id="cancelStagedUpdate">Clear staged update</button>':''}<button type="button" class="btn secondary" data-close-dialog>Close</button><button class="btn" id="stageUpdateBtn">Validate & stage</button></div>`);
+      $('#stageUpdateBtn').onclick=async()=>{const f=$('#serverUpdateFile').files[0];if(!f){toast('Choose an update ZIP first',true);return;}const btn=$('#stageUpdateBtn'),old=btn.textContent;btn.disabled=true;btn.textContent='Validating & backing up…';const fd=new FormData();fd.append('file',f);try{const r=await api('/api/update/stage',{method:'POST',body:fd,timeoutMs:180000});toast(`Update ${r.manifest?.target_version||''} staged; application files are unchanged`);openUpdateCenter();}catch(err){btn.disabled=false;btn.textContent=old;toast(err.message,true);}};
+      $('#cancelStagedUpdate')?.addEventListener('click',async()=>{try{const r=await api('/api/update/staged',{method:'DELETE'});toast(r.backup_preserved?'Staged update cleared; backup preserved':'Staged update cleared');openUpdateCenter();}catch(err){toast(err.message,true);}});
+    }
+    $('#updateCenterBtn')?.addEventListener('click',openUpdateCenter);
+
     await loadProjects();
     async function loadProjects(){
       let items=[];
       if(mode==='local'){try{items=await api('/api/local/projects');}catch(err){toast(err.message,true);}}
       else{const ids=JSON.parse(lsGet('pw_projects','[]'));items=(await Promise.all(ids.map(async id=>{try{return await api(`/api/projects/${id}/summary`);}catch{return null;}}))).filter(Boolean);}
       const grid=$('#projectGrid');
-      if(!items.length){grid.innerHTML=`<div class="empty-card"><div><strong>No accessible projects in this browser.</strong><p class="muted">${mode==='server'?'Open an invitation, recover project access, or use an authorized Create / Import action.':'Create a project or import a project pack.'}</p></div></div>`;return;}
+      if(!items.length){grid.innerHTML=`<div class="empty-card"><div><strong>No accessible projects in this browser.</strong><p class="muted">${mode==='server'?'Open an invitation, recover Owner access, or use Host access to create/import a project.':'Create a project or import a project pack.'}</p></div></div>`;return;}
       grid.innerHTML=items.map(p=>`<a class="project-card" href="/project/${p.id}"><div><span class="status-pill">${esc(p.status||'active')}</span></div><h3>${esc(p.name)}</h3><p>${esc(p.description||'No description yet.')}</p><div class="project-meta"><span>${esc(p.role||p.mode||'local')}</span><span>${p.expiry?`Ends ${esc(fmtShortDate(p.expiry))}`:'No end date'}</span></div></a>`).join('');
     }
   }
@@ -326,8 +300,8 @@
       return `${who} · ${activityLabel(a.type)}${a.summary?` · ${a.summary}`:''}`;
     }
     function activityHtml(items){return items.length?items.map(a=>`<div class="activity-row"><time>${esc(fmtDate(a.ts))}</time><div><strong>${esc(activityLabel(a.type))}</strong><div class="muted">${esc(activityDetail(a))}</div></div></div>`).join(''):'<div class="empty">No activity yet.</div>';}
-    function statusLabel(v){return ({todo:'Pending',doing:'In Progress',done:'Done',scheduled:'Scheduled',happened:'Done',archived:'Archived'})[v]||v||'Pending';}
-    function isArchivedCard(c){return ['done','archived','happened'].includes(c.status);}
+    function statusLabel(v){return ({todo:'Pending',doing:'In Progress',done:'Done',scheduled:'Scheduled',happened:'Done',active:'Active',archived:'Archived'})[v]||v||'Pending';}
+    function isArchivedCard(c){return c.type==='note'?c.status==='archived':['done','archived','happened'].includes(c.status);}
     function contentSummary(text=''){return text.split('\n').map(x=>x.replace(/^\s*(?:[-*]\s+)?\[[ xX]\]\s*/,'').replace(/^[-*#>]+\s*/,'').trim()).filter(Boolean).join(' ').slice(0,220);}
     function checklistLines(content=''){const out=[];content.split('\n').forEach((line,i)=>{const m=line.match(/^(\s*(?:[-*]\s+)?\[)( |x|X)(\]\s+)(.*)$/);if(m)out.push({lineIndex:i,checked:m[2].toLowerCase()==='x',text:m[4]});});return out;}
 
@@ -357,6 +331,7 @@
       return state.cards.filter(c=>{const scope=state.cardScope==='archive'?isArchivedCard(c):!isArchivedCard(c);return scope&&(!q||`${c.title} ${c.content} ${(c.tags||[]).join(' ')}`.toLowerCase().includes(q))&&(!types.length||types.includes(c.type))&&(!statuses.length||statuses.includes(c.status)||(statuses.includes('done')&&c.status==='happened'))&&(!assignees.length||assignees.some(id=>(c.assignees||[]).includes(id)));});
     }
     function cardPreview(c){
+      if(c.type==='note'){const text=c.content||'';return text?`<div data-md="${esc(text)}">${esc(text)}</div>`:'<span class="muted">No content yet.</span>';}
       const checks=checklistLines(c.content||''), non=(c.content||'').split('\n').filter(line=>!/^\s*(?:[-*]\s+)?\[[ xX]\]\s+/.test(line)).join('\n').trim();
       let html='';
       if(non)html+=`<div data-md="${esc(non)}">${esc(non)}</div>`;
@@ -368,12 +343,13 @@
         ? [['scheduled','Scheduled'],['done','Done'],['archived','Archived']]
         : [['todo','Pending'],['doing','In Progress'],['done','Done'],['archived','Archived']];
     }
+    function cardTypeLabel(c){return c.type==='event'?'Event':c.type==='note'?'Note':'To-do';}
     function cardTile(c){
       const avatars=(c.assignees||[]).slice(0,4).map(id=>`<span class="mini-avatar" title="${esc(personName(id))}">${esc(initials(id))}</span>`).join('');
       const editable=canEditCard(c),deletable=canDeleteCard(c),access=(c.edit_access||'public'),visibility=(c.visibility||'everyone');
-      const statusUi=editable?`<details class="status-quick"><summary class="status-badge">${esc(statusLabel(c.status))}</summary><div class="status-popover">${statusChoices(c).map(([value,label])=>`<button type="button" data-card-status="${esc(value)}" class="${(c.status==='happened'?'done':c.status)===value?'active':''}">${esc(label)}</button>`).join('')}</div></details>`:`<span class="status-badge">${esc(statusLabel(c.status))}</span>`;
+      const statusUi=c.type==='note'?'':(editable?`<details class="status-quick"><summary class="status-badge">${esc(statusLabel(c.status))}</summary><div class="status-popover">${statusChoices(c).map(([value,label])=>`<button type="button" data-card-status="${esc(value)}" class="${(c.status==='happened'?'done':c.status)===value?'active':''}">${esc(label)}</button>`).join('')}</div></details>`:`<span class="status-badge">${esc(statusLabel(c.status))}</span>`);
       const openButton=`<button class="mini-icon-btn card-open" aria-label="${editable?'Edit':'View'} card">${icon(editable?'edit':'eye')}</button>`;
-      return `<article class="work-card" data-card-id="${c.id}"><div class="work-card-head"><div class="work-card-title"><div class="work-card-badges"><span class="type-badge">${c.type==='event'?'Event':'To-do'}</span>${statusUi}<span class="access-badge">${access==='private'?'Creator edit':'Shared edit'}</span><span class="visibility-badge">${visibility==='private'?'Only me':'Everyone'}</span></div><h3>${esc(c.title)}</h3></div><div class="work-card-actions">${openButton}${deletable?`<button class="mini-icon-btn danger card-delete" aria-label="Delete card">${icon('trash')}</button>`:''}</div></div>${c.start?`<div class="work-card-meta"><span class="meta-inline">${icon('calendar')}<span>${esc(fmtDate(c.start))}</span>${c.type==='event'?`<button class="text-link card-ics" data-url="/api/projects/${pid}/cards/${c.id}/ics">Add to calendar</button>`:''}</span></div>`:''}${(c.tags||[]).length?`<div class="work-card-tags">${c.tags.map(t=>`<span class="tag">${esc(t)}</span>`).join('')}</div>`:''}<div class="work-card-body">${cardPreview(c)}</div><div class="work-card-footer"><div><div class="avatar-stack">${avatars}</div><span class="card-author">Created by ${esc(personName(c.created_by))}</span></div><span>v${c.version}</span></div></article>`;
+      return `<article class="work-card" data-card-id="${c.id}"><div class="work-card-head"><div class="work-card-title"><div class="work-card-badges"><span class="type-badge">${cardTypeLabel(c)}</span>${statusUi}<span class="access-badge">${access==='private'?'Creator edit':'Shared edit'}</span><span class="visibility-badge">${visibility==='private'?'Only me':'Everyone'}</span></div><h3>${esc(c.title)}</h3></div><div class="work-card-actions">${openButton}${deletable?`<button class="mini-icon-btn danger card-delete" aria-label="Delete card">${icon('trash')}</button>`:''}</div></div>${c.start?`<div class="work-card-meta"><span class="meta-inline">${icon('calendar')}<span>${esc(fmtDate(c.start))}</span>${c.type==='event'?`<button class="text-link card-ics" data-url="/api/projects/${pid}/cards/${c.id}/ics">Add to calendar</button>`:''}</span></div>`:''}${(c.tags||[]).length?`<div class="work-card-tags">${c.tags.map(t=>`<span class="tag">${esc(t)}</span>`).join('')}</div>`:''}<div class="work-card-body">${cardPreview(c)}</div><div class="work-card-footer"><div>${c.type==='note'?'':`<div class="avatar-stack">${avatars}</div>`}<span class="card-author">Created by ${esc(personName(c.created_by))}</span></div><span>v${c.version}</span></div></article>`;
     }
     function checklistScrollState(cb){
       const workCard=cb.closest('[data-card-id]'),dashCard=cb.closest('[data-dashboard-card]');
@@ -419,25 +395,39 @@
     function cardFormHtml(c={}){
       const type=c.type||'task',existing=Boolean(c.id),editable=!existing?canWrite():canEditCard(c),access=c.edit_access||'public',visibility=c.visibility||'everyone';
       const people=state.people.filter(p=>p.role!=='viewer').map(p=>({value:p.id,label:p.display_name}));
-      return `${dialogHeader('CARD',type==='event'?'Event':'Task')}<form id="cardForm" class="form-stack"><div class="card-owner-line">${existing?`Created by <strong>${esc(personName(c.created_by))}</strong> · ${access==='private'?'Creator editing':'Shared editing'} · ${visibility==='private'?'Only me':'Everyone'}`:'New cards are visible to everyone in the project by default.'}</div><div class="type-switch"><button type="button" data-card-type="task" class="${type==='task'?'active':''}">Task</button><button type="button" data-card-type="event" class="${type==='event'?'active':''}">Event</button></div><input type="hidden" name="type" value="${type}"><label>Title<input name="title" required value="${esc(c.title||'')}"></label><div class="two-col"><label>Status<select name="status">${statusOptions(type,c.status||'todo')}</select></label><label>Edit access<select name="edit_access"><option value="public" ${access==='public'?'selected':''}>Shared — Owners & Members may edit</option><option value="private" ${access==='private'?'selected':''}>Creator only — only the creator may edit</option></select></label></div><label>Visibility<select name="visibility"><option value="everyone" ${visibility==='everyone'?'selected':''}>Everyone — all project members can see</option><option value="private" ${visibility==='private'?'selected':''}>Only me — hidden from other project members</option></select><span class="field-help">Visibility controls who can see this card. Edit access is a separate setting.</span></label><div class="two-col"><label class="event-only" ${type==='event'?'':'hidden'}>Start<input name="start" type="datetime-local" value="${esc((c.start||'').replace('Z','').slice(0,16))}"></label><label class="event-only" ${type==='event'?'':'hidden'}>End <span class="optional">Optional</span><input name="end" type="datetime-local" value="${esc((c.end||'').replace('Z','').slice(0,16))}"></label></div><label>Assignees${multiCheckHtml('assignees',people,c.assignees||[])}</label><label>Tags${tagEditorHtml('tags',c.tags||[])}</label><label>Content <span class="optional">Markdown supported · use [ ] or - [ ] for checklist items</span><textarea name="content" rows="9">${esc(c.content||'')}</textarea></label>${c.id&&c.type==='event'&&c.start?`<button type="button" class="btn secondary" id="cardIcsBtn">${icon('calendar')} Add to my calendar</button>`:''}${existing?'<section class="card-activity-panel"><div class="modal-section-title">Card activity</div><div id="cardActivityList" class="card-activity-list"><div class="muted">Loading…</div></div></section>':''}<div class="modal-actions"><button type="button" class="btn secondary" data-close-dialog>${editable?'Cancel':'Close'}</button>${editable?'<button class="btn" type="submit">Save</button>':''}</div></form>`;
+      const title=type==='event'?'Event':type==='note'?'Note':'To-do';
+      const noteArchive=existing&&type==='note'&&editable?`<button type="button" class="btn secondary" id="noteArchiveBtn">${c.status==='archived'?'Restore note':'Archive note'}</button>`:'';
+      return `${dialogHeader('CARD',title)}<form id="cardForm" class="form-stack"><div class="card-owner-line">${existing?`Created by <strong>${esc(personName(c.created_by))}</strong> · ${access==='private'?'Creator editing':'Shared editing'} · ${visibility==='private'?'Only me':'Everyone'}`:'New cards are visible to everyone in the project by default.'}</div><div class="type-switch"><button type="button" data-card-type="task" class="${type==='task'?'active':''}">To-do</button><button type="button" data-card-type="event" class="${type==='event'?'active':''}">Event</button><button type="button" data-card-type="note" class="${type==='note'?'active':''}">Note</button></div><input type="hidden" name="type" value="${type}"><label>Title<input name="title" required value="${esc(c.title||'')}"></label><div class="two-col"><label class="task-event-only" ${type==='note'?'hidden':''}>Status<select name="status">${statusOptions(type,c.status||'todo')}</select></label><label>Edit access<select name="edit_access"><option value="public" ${access==='public'?'selected':''}>Shared — Owners & Members may edit</option><option value="private" ${access==='private'?'selected':''}>Creator only — only the creator may edit</option></select></label></div><label>Visibility<select name="visibility"><option value="everyone" ${visibility==='everyone'?'selected':''}>Everyone — all project members can see</option><option value="private" ${visibility==='private'?'selected':''}>Only me — hidden from other project members</option></select><span class="field-help">Visibility controls who can see this card. Edit access is a separate setting.</span></label><div class="two-col"><label class="event-only" ${type==='event'?'':'hidden'}>Start<input name="start" type="datetime-local" value="${esc((c.start||'').replace('Z','').slice(0,16))}"></label><label class="event-only" ${type==='event'?'':'hidden'}>End <span class="optional">Optional</span><input name="end" type="datetime-local" value="${esc((c.end||'').replace('Z','').slice(0,16))}"></label></div><label class="task-event-only" ${type==='note'?'hidden':''}>Assignees${multiCheckHtml('assignees',people,c.assignees||[])}</label><label>Tags${tagEditorHtml('tags',c.tags||[])}</label><label>Content <span class="optional">Markdown supported${type==='note'?'':' · use [ ] or - [ ] for checklist items'}</span><textarea name="content" rows="9">${esc(c.content||'')}</textarea></label>${c.id&&c.type==='event'&&c.start?`<button type="button" class="btn secondary" id="cardIcsBtn">${icon('calendar')} Add to my calendar</button>`:''}${noteArchive}${existing?'<section class="card-activity-panel"><div class="modal-section-title">Card activity</div><div id="cardActivityList" class="card-activity-list"><div class="muted">Loading…</div></div></section>':''}<div class="modal-actions"><button type="button" class="btn secondary" data-close-dialog>${editable?'Cancel':'Close'}</button>${editable?'<button class="btn" type="submit">Save</button>':''}</div></form>`;
     }
     async function loadCardActivity(id){
       const el=$('#cardActivityList');if(!el)return;
       try{const items=await api(`/api/projects/${pid}/cards/${id}/activity`);el.innerHTML=items.length?items.map(a=>`<div class="card-activity-row"><time>${esc(fmtDate(a.ts))}</time><div>${esc(activityDetail(a))}</div></div>`).join(''):'<div class="muted">No activity yet.</div>';}catch(err){el.innerHTML=`<div class="muted">${esc(err.message)}</div>`;}
     }
-    function openCard(id=null){
-      const c=id?state.cards.find(x=>x.id===id):{type:'task',status:'todo',assignees:[],tags:[],edit_access:'public',visibility:'everyone'};if(!c)return;
+    function openCard(id=null,initialType='task'){
+      const requestedType=['task','event','note'].includes(initialType)?initialType:'task';
+      const c=id?state.cards.find(x=>x.id===id):{type:requestedType,status:requestedType==='event'?'scheduled':requestedType==='note'?'active':'todo',assignees:[],tags:[],edit_access:'public',visibility:'everyone'};if(!c)return;
       const editable=!c.id?canWrite():canEditCard(c);openDialog(cardFormHtml(c));const form=$('#cardForm');initTagEditors(form);initMultiChecks(form);
+      if(!c.id){try{form.dataset.idempotencyKey=crypto.randomUUID();}catch{form.dataset.idempotencyKey=`cb-${Date.now()}-${Math.random().toString(16).slice(2)}`;}}
       if(!editable){$$('input,textarea,select',form).forEach(el=>el.disabled=true);$$('[data-card-type]',form).forEach(el=>el.disabled=true);$$('.multi-done',form).forEach(el=>el.disabled=true);}
       else if(c.id){
         if(!canChangeCardAccess(c)) form.edit_access.disabled=true;
         if(!canChangeCardVisibility(c)) form.visibility.disabled=true;
       }
-      $$('[data-card-type]',form).forEach(b=>b.onclick=()=>{if(!editable)return;const type=b.dataset.cardType;$$('[data-card-type]',form).forEach(x=>x.classList.toggle('active',x===b));form.type.value=type;$$('.event-only',form).forEach(x=>x.hidden=type!=='event');form.status.innerHTML=statusOptions(type,type==='event'?'scheduled':'todo');$('.modal-head h2').textContent=type==='event'?'Event':'Task';});
+      $$('[data-card-type]',form).forEach(b=>b.onclick=()=>{if(!editable)return;const type=b.dataset.cardType;$$('[data-card-type]',form).forEach(x=>x.classList.toggle('active',x===b));form.type.value=type;$$('.event-only',form).forEach(x=>x.hidden=type!=='event');$$('.task-event-only',form).forEach(x=>x.hidden=type==='note');if(form.status)form.status.innerHTML=statusOptions(type,type==='event'?'scheduled':'todo');$('.modal-head h2').textContent=type==='event'?'Event':type==='note'?'Note':'To-do';});
       if($('#cardIcsBtn'))$('#cardIcsBtn').onclick=()=>downloadResource(`/api/projects/${pid}/cards/${c.id}/ics`,`${c.title.replace(/[^a-z0-9_-]+/gi,'-')}.ics`);
+      if($('#noteArchiveBtn'))$('#noteArchiveBtn').onclick=async()=>{try{const updated=await api(`/api/projects/${pid}/cards/${c.id}`,{method:'PATCH',body:{expected_version:c.version,status:c.status==='archived'?'active':'archived'},timeoutMs:30000});state.cards=state.cards.map(x=>x.id===c.id?updated:x);closeDialog();renderCards();renderOverview();refreshActivity();toast(updated.status==='archived'?'Note archived':'Note restored');}catch(err){if(err.status===409)openConflict(err,c);else toast(err.message,true);}};
       if(c.id)loadCardActivity(c.id);
-      if(editable)form.onsubmit=async e=>{e.preventDefault();const fd=new FormData(form),body={title:fd.get('title'),type:fd.get('type'),status:fd.get('status'),start:fd.get('type')==='event'&&fd.get('start')?new Date(fd.get('start')).toISOString():null,end:fd.get('type')==='event'&&fd.get('end')?new Date(fd.get('end')).toISOString():null,assignees:multiValues(form,'assignees'),tags:tagsFromForm(form),content:fd.get('content')||'',edit_access:c.id&&!canChangeCardAccess(c)?(c.edit_access||'public'):(fd.get('edit_access')||'public'),visibility:c.id&&!canChangeCardVisibility(c)?(c.visibility||'everyone'):(fd.get('visibility')||'everyone')};try{if(c.id){body.expected_version=c.version;const updated=await api(`/api/projects/${pid}/cards/${c.id}`,{method:'PATCH',body});state.cards=state.cards.map(x=>x.id===c.id?updated:x);}else{state.cards.unshift(await api(`/api/projects/${pid}/cards`,{method:'POST',body}));}closeDialog();renderCards();renderOverview();populateFilters();refreshActivity();toast('Card saved');}catch(err){if(err.status===409)openConflict(err,c);else toast(err.message,true);}};
+      if(editable)form.onsubmit=async e=>{
+        e.preventDefault();const saveBtn=form.querySelector('[type=submit]');if(saveBtn?.disabled)return;const oldText=saveBtn?.textContent;if(saveBtn){saveBtn.disabled=true;saveBtn.textContent='Saving…';}
+        const fd=new FormData(form),type=fd.get('type'),body={title:fd.get('title'),type,status:type==='note'?(c.status==='archived'?'archived':'active'):fd.get('status'),start:type==='event'&&fd.get('start')?new Date(fd.get('start')).toISOString():null,end:type==='event'&&fd.get('end')?new Date(fd.get('end')).toISOString():null,assignees:type==='note'?[]:multiValues(form,'assignees'),tags:tagsFromForm(form),content:fd.get('content')||'',edit_access:c.id&&!canChangeCardAccess(c)?(c.edit_access||'public'):(fd.get('edit_access')||'public'),visibility:c.id&&!canChangeCardVisibility(c)?(c.visibility||'everyone'):(fd.get('visibility')||'everyone')};
+        try{
+          if(c.id){body.expected_version=c.version;const updated=await api(`/api/projects/${pid}/cards/${c.id}`,{method:'PATCH',body,timeoutMs:30000});state.cards=state.cards.map(x=>x.id===c.id?updated:x);}
+          else{const created=await api(`/api/projects/${pid}/cards`,{method:'POST',body,headers:{'X-Idempotency-Key':form.dataset.idempotencyKey},timeoutMs:30000});if(!state.cards.some(x=>x.id===created.id))state.cards.unshift(created);}
+          closeDialog();renderCards();renderOverview();populateFilters();refreshActivity();toast('Card saved');
+        }catch(err){if(saveBtn){saveBtn.disabled=false;saveBtn.textContent=oldText||'Save';}if(err.status===409)openConflict(err,c);else if(err.code==='TIMEOUT')toast('Could not confirm the save. You can retry safely; Cocklebur will not create a duplicate.',true);else toast(err.message,true);}
+      };
     }
+
     async function deleteCard(id){const c=state.cards.find(x=>x.id===id);if(!c||!canDeleteCard(c))return;if(!confirm(`Permanently delete “${c.title}”? Only the original creator can do this.`))return;try{await api(`/api/projects/${pid}/cards/${id}`,{method:'DELETE'});state.cards=state.cards.filter(x=>x.id!==id);renderCards();renderOverview();refreshActivity();toast('Card deleted');}catch(err){toast(err.message,true);}}
     function openConflict(err,c){const current=err.data.current||{};openDialog(`${dialogHeader('CONFLICT','This card changed while you were editing')}<div class="banner warn">Cocklebur will not silently merge or overwrite a newer version.</div><section class="panel"><strong>Latest</strong><p>${esc(current.title||'')}</p><span class="microcopy">version ${current.version||'?'}</span></section><div class="modal-actions"><button class="btn" id="reloadConflict">Load latest</button><button class="btn secondary" data-close-dialog>Cancel</button></div>`);$('#reloadConflict').onclick=()=>openCard(current.id||c.id);}
 

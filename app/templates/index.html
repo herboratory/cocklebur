@@ -27,10 +27,12 @@
         <p class="subtitle">Small workspaces for things that have a beginning, a middle, and an end.</p>
       </div>
       <div class="header-actions">
-        {% if mode == 'server' %}<button class="btn secondary" id="hostAccessBtn">Host access</button><button class="btn secondary host-admin-only" id="instancePermissionsBtn">Instance permissions</button><button class="btn secondary" id="ownerRecoveryBtn">Owner recovery</button>{% endif %}
-        <button class="btn{% if mode == 'server' %} create-permission{% endif %}" id="newProjectBtn">New project</button>
-        <button class="btn secondary{% if mode == 'server' %} import-permission{% endif %}" id="importBtn">Import pack</button>
-        <input id="importFile" type="file" accept=".zip" hidden>
+        {% if mode == 'server' %}<button class="btn secondary" id="hostAccessBtn">Host access</button><button class="btn secondary" id="ownerRecoveryBtn">Owner recovery</button>{% endif %}
+        <button class="btn{% if mode == 'server' %} host-only{% endif %}" id="newProjectBtn">New project</button>
+        <button class="btn secondary" id="exportBundleBtn">Export accessible</button>
+        <button class="btn secondary{% if mode == 'server' %} host-only{% endif %}" id="importBtn">Import</button>
+        {% if mode == 'server' %}<button class="btn secondary host-only" id="updateCenterBtn">Update center</button>{% endif %}
+        <input id="importFile" type="file" accept=".zip" multiple hidden>
       </div>
     </section>
 
@@ -52,17 +54,17 @@
   <dialog id="projectDialog" class="modal">
     <form id="projectForm" method="dialog" class="modal-card">
       <div class="modal-head"><div><p class="eyebrow">NEW PROJECT</p><h2>Create a project</h2><p class="muted">Choose where it lives now. You can export the whole thing later.</p></div><button class="icon-btn project-dialog-cancel" type="button" aria-label="Close">×</button></div>
-      <label><span class="field-label">Project name</span><input name="name" required maxlength="160" placeholder="e.g. Community event"></label>
-      <label><span class="field-label">Description</span><textarea name="description" rows="3" placeholder="What is this project for?"></textarea></label>
-      <div class="two-col project-form-secondary-row">
-        <label><span class="field-label">Who will use it?</span>
+      <label>Project name<input name="name" required maxlength="160" placeholder="e.g. AeON Learning Substrate"></label>
+      <label class="project-description-field">Description<textarea name="description" rows="3" placeholder="What is this project for?"></textarea></label>
+      <div class="two-col">
+        <label>Who will use it?
           <select name="mode">{% if mode == 'server' %}<option value="server">Me and other people (Server)</option>{% else %}<option value="local">Only me (Local)</option><option value="server">Shared from this machine (advanced)</option>{% endif %}</select>
         </label>
-        <label><span class="field-label">Expected end date <span class="optional">(Optional)</span></span><input name="expiry" type="date"></label>
+        <label>Expected end date <span class="optional">Optional</span><input name="expiry" type="date"></label>
       </div>
-      <label><span class="field-label">Your display name</span><input name="owner_name" value="Owner" maxlength="100"></label>
+      <label>Your display name<input name="owner_name" value="Owner" maxlength="100"></label>
       <div id="customStorageRow" class="storage-config-stack" hidden>
-        <label><span class="field-label">Local storage folder <span class="optional">(Optional)</span></span><div class="copy-row"><input name="storage_path" id="storagePath" readonly placeholder="Use app-managed default"><button type="button" class="btn compact" id="chooseFolderBtn">Choose</button></div></label>
+        <label>Local storage folder <span class="optional">Optional</span><div class="copy-row"><input name="storage_path" id="storagePath" readonly placeholder="Use app-managed default"><button type="button" class="btn compact" id="chooseFolderBtn">Choose</button></div></label>
         <div class="storage-warning"><strong>Choose carefully.</strong><span>This location cannot be changed directly after project creation. Move a project later with Export → Import.</span></div>
       </div>
       <div class="modal-actions"><button class="btn secondary project-dialog-cancel" type="button">Cancel</button><button class="btn" type="submit" value="default">Create project</button></div>

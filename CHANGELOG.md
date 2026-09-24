@@ -1,15 +1,11 @@
-# Changelog
+## 0.2.17 — SERVER-WORKSPACE-NOTE-UPDATE-STAGING
 
-## 0.2.16 — SERVER-INSTANCE-AUTH-01
-
-- Split instance authorization from project roles: Host vs Owner / Member / Viewer.
-- Converted `COCKLEBUR_HOST_KEY` semantics into a one-time Host bootstrap flow; added `COCKLEBUR_BOOTSTRAP_KEY` as the preferred name while keeping the old name compatible.
-- Added persistent Host recovery with rotating recovery codes and multiple valid Host browser sessions.
-- Added independent `Create projects` and `Import project packs` instance permissions for existing project identities.
-- A delegated creator becomes Owner of the project they create; a delegated importer receives Owner access to the imported project.
-- Removing an identity or deleting its source project cleans up delegated instance grants.
-- Added Host-side Instance permissions UI and clarified the Infrastructure Admin / Deployer trust boundary.
-- Project pack format remains `1.0`; instance-level auth/grants are not portable project data.
+- Added Workspace Bundle export for all Owner/Member projects accessible in the browser, plus multi-pack / Workspace Bundle import preflight and duplicate handling.
+- Added retry-safe Card create: Save disables immediately, shows `Saving…`, uses a request timeout, and retries with the same idempotency key so a delayed response cannot create duplicate Cards.
+- Added Server Note Cards with stable Card IDs, tags/content, visibility/edit access, and Active/Archived lifecycle.
+- Added spacing between Project name and Description in the New Project modal.
+- Added Host-only Update Center staging: update ZIP validation, checksum/path safety, version compatibility, pre-update data backup, staging status, and cancel. No Docker/K8s/app replacement authority is granted to the web process.
+- Project Pack format remains 1.0.
 
 ## 0.2.15-mvp — PW-MVP-01-FINAL
 

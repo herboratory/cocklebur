@@ -3,29 +3,27 @@ from __future__ import annotations
 import compileall
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED = [
-    'README.md', 'README_zh-Hant.md', 'DEPLOY_SERVER.md',
+    'README.md', 'README_zh-Hant.md', 'DEPLOY_SERVER.md', 'PR2_MERGE_NOTES.md',
     'USER_GUIDE.md', 'USER_GUIDE_zh-Hant.md', 'BACKUP_RESTORE.md',
-    'UPDATE.md', 'EXPORT_FORMAT.md', 'SECURITY.md', 'LICENSE',
-    'CHANGELOG.md', 'RELEASE.md', 'Dockerfile', 'docker-compose.yml',
-    '.env.example', 'requirements.txt', 'ACCEPTANCE_SERVER_0.2.16_zh-Hant.md',
-    'app/__init__.py', 'app/config.py', 'app/main.py', 'app/models.py',
-    'app/security.py', 'app/storage.py', 'app/rendering.py',
+    'UPDATE.md', 'UPDATE_PACKAGE_FORMAT.md', 'EXPORT_FORMAT.md', 'SECURITY.md', 'LICENSE',
+    'CHANGELOG.md', 'RELEASE.md', 'ACCEPTANCE_SERVER_0.2.17_zh-Hant.md', 'Dockerfile', 'docker-compose.yml',
+    '.env.example', 'requirements.txt',
+    'app/__init__.py', 'app/main.py', 'app/storage.py', 'app/update_center.py',
     'app/static/app.js', 'app/static/app.css', 'app/static/cocklebur-logo.png',
-    'app/templates/index.html', 'app/templates/project.html',
+    'app/templates/index.html', 'app/templates/project.html', 'scripts/build_update_package.py', 'scripts/smoke_server_0217.py',
 ]
 
 FORBIDDEN_FILES = [
-    '.env', 'data/.instance_secret', 'data/.instance_id', 'data/.host_key',
-    'data/.instance_auth.json',
+    '.env', 'data/.instance_secret', 'data/.instance_id', 'data/.host_key'
 ]
 FORBIDDEN_TOP_LEVEL = [
     'desktop.py', 'build_desktop.py', 'requirements-desktop.txt',
-    'requirements-tauri.txt', 'INSTALL_LOCAL.md', 'run_local.py',
-    'src-tauri', '__MACOSX', 'tests', 'manual_tests', 'docs',
+    'INSTALL_LOCAL.md', 'run_local.py', '__MACOSX'
 ]
 
 
@@ -52,7 +50,13 @@ def main() -> None:
             caches.append(p)
     if caches:
         fail('Cache/metadata artifacts present: ' + ', '.join(str(p.relative_to(ROOT)) for p in caches[:10]))
-    print('PASS — no runtime secrets, project data, tests, desktop tooling, or OS cache metadata')
+
+    data_root = ROOT / 'data'
+    if data_root.exists():
+        projects = list(data_root.glob('p_*'))
+        if projects:
+            fail('Unexpected project data in release: ' + ', '.join(str(p.relative_to(ROOT)) for p in projects[:10]))
+    print('PASS — no runtime secrets, project data, or OS cache metadata')
 
     if not compileall.compile_dir(ROOT / 'app', quiet=1):
         fail('Python compile failed')
@@ -65,11 +69,11 @@ def main() -> None:
         print('PASS — JavaScript syntax')
 
     release = (ROOT / 'RELEASE.md').read_text('utf-8')
-    for marker in ['SERVER-INSTANCE-AUTH-01', '0.2.16', 'Project pack format:** 1.0']:
+    for marker in ['SERVER-0.2.17-WORKSPACE-NOTE-UPDATE-STAGING', '0.2.17', 'Project pack format:** 1.0']:
         if marker not in release:
             fail(f'Missing release marker: {marker}')
 
-    # compileall creates __pycache__; remove it so validation does not dirty the package.
+    # compileall creates __pycache__; remove it so a guard run does not dirty the release tree.
     for p in sorted(ROOT.rglob('__pycache__'), key=lambda x: len(x.parts), reverse=True):
         shutil.rmtree(p, ignore_errors=True)
     for p in ROOT.rglob('*.pyc'):

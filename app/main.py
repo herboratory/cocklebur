@@ -3,6 +3,8 @@ from __future__ import annotations
 import io
 import json
 import hmac
+import secrets
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -18,14 +20,16 @@ from . import __version__
 from .config import load_settings
 from .models import (
     CardCreate, CardPatch, ChannelCreate, JoinRequest, MessageCreate, MessageEdit, AnnouncementEdit,
-    PersonPatch, ProjectCreate, ProjectPatch, ReplyCreate, SeenUpdate, SettingsPatch, SelfPatch, HostLogin, HostRecover, InstancePermissionPatch, OwnerRecover,
+    PersonPatch, ProjectCreate, ProjectPatch, ReplyCreate, SeenUpdate, SettingsPatch, SelfPatch, HostLogin, OwnerRecover, WorkspaceImportCommit,
 )
 from .rendering import render_markdown
-from .security import safe_id
+from .security import host_session_token, safe_id
 from .storage import CapsuleStore, ConflictError, NotFoundError, PermissionError_, ValidationError
+from .update_center import UpdateCenter
 
 settings = load_settings()
 store = CapsuleStore(settings)
+update_center = UpdateCenter(settings, store)
 app = FastAPI(title="Cocklebur", version=__version__)
 BASE = Path(__file__).resolve().parent
 app.mount("/static", StaticFiles(directory=BASE / "static"), name="static")
@@ -45,70 +49,24 @@ def set_access_cookie(response: Response, project_id: str, token: str) -> None:
 
 HOST_COOKIE = "cocklebur_host"
 
+def _host_session_value() -> str:
+    return host_session_token(settings.secret_key)
+
 def is_host(request: Request) -> bool:
     if settings.app_mode != "server":
         return True
-    return bool(store.resolve_host(request.cookies.get(HOST_COOKIE)))
+    value = request.cookies.get(HOST_COOKIE, "")
+    return hmac.compare_digest(value, _host_session_value())
 
 def require_host(request: Request) -> None:
     if settings.app_mode == "server" and not is_host(request):
-        raise HTTPException(403, "Instance Host access is required")
+        raise HTTPException(403, "Host access is required to create or import projects on this server")
 
-def set_host_cookie(response: Response, token: str) -> None:
+def set_host_cookie(response: Response) -> None:
     response.set_cookie(
-        HOST_COOKIE, token, httponly=True, secure=settings.base_url.startswith("https://"),
+        HOST_COOKIE, _host_session_value(), httponly=True, secure=settings.base_url.startswith("https://"),
         samesite="lax", max_age=60 * 60 * 24 * 180, path="/",
     )
-
-def _delegated_instance_access(request: Request) -> dict[str, Any]:
-    result = {"can_create_projects": False, "can_import_projects": False, "sources": []}
-    for grant in store.instance_grants():
-        project_id = str(grant.get("project_id") or "")
-        person_id = str(grant.get("person_id") or "")
-        if not project_id or not person_id:
-            continue
-        try:
-            person = store.resolve_access(project_id, request.cookies.get(cookie_name(project_id)))
-        except (NotFoundError, ValueError, ValidationError):
-            continue
-        if not person or person.get("id") != person_id:
-            continue
-        can_create = bool(grant.get("can_create_projects"))
-        can_import = bool(grant.get("can_import_projects"))
-        result["can_create_projects"] = result["can_create_projects"] or can_create
-        result["can_import_projects"] = result["can_import_projects"] or can_import
-        result["sources"].append({
-            "project_id": project_id,
-            "person_id": person_id,
-            "display_name": person.get("display_name", person_id),
-            "can_create_projects": can_create,
-            "can_import_projects": can_import,
-        })
-    return result
-
-def instance_access(request: Request) -> dict[str, Any]:
-    if settings.app_mode != "server":
-        return {
-            "mode": settings.app_mode, "host": True, "host_claimed": True,
-            "can_create_projects": True, "can_import_projects": True, "sources": [],
-        }
-    host = is_host(request)
-    delegated = _delegated_instance_access(request)
-    return {
-        "mode": settings.app_mode,
-        "host": host,
-        "host_claimed": store.host_claimed(),
-        "can_create_projects": host or delegated["can_create_projects"],
-        "can_import_projects": host or delegated["can_import_projects"],
-        "sources": delegated["sources"],
-    }
-
-def require_instance_permission(request: Request, permission: str) -> None:
-    access = instance_access(request)
-    key = "can_create_projects" if permission == "create" else "can_import_projects"
-    if not access.get(key):
-        label = "create projects" if permission == "create" else "import project packs"
-        raise HTTPException(403, f"Instance permission is required to {label}")
 
 
 def current_person(request: Request, project_id: str) -> dict[str, Any]:
@@ -170,53 +128,52 @@ async def security_headers(request: Request, call_next):
 
 @app.get("/health")
 def health():
-    return {
-        "status": "ok", "version": __version__, "mode": settings.app_mode,
-        "instance_id": settings.instance_id,
-        "host_claimed": store.host_claimed() if settings.app_mode == "server" else True,
-    }
+    return {"status": "ok", "version": __version__, "mode": settings.app_mode, "instance_id": settings.instance_id}
 
 
 @app.get("/api/host/status")
 def host_status(request: Request):
-    access = instance_access(request)
-    host = store.resolve_host(request.cookies.get(HOST_COOKIE)) if settings.app_mode == "server" else {"display_name": "Local Host"}
-    return {**access, "host_profile": host}
+    return {"mode": settings.app_mode, "host": is_host(request) if settings.app_mode == "server" else True}
 
 
-@app.get("/api/instance/access")
-def get_instance_access(request: Request):
-    return instance_access(request)
+@app.get("/api/update/status")
+def update_status(request: Request):
+    require_host(request)
+    return update_center.status()
+
+
+@app.post("/api/update/stage")
+async def update_stage(request: Request, file: UploadFile = File(...)):
+    require_host(request)
+    max_bytes = settings.max_update_mb * 1024 * 1024
+    data = await file.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise HTTPException(413, "Update package exceeds upload limit")
+    temp = settings.data_dir / ".imports"
+    temp.mkdir(exist_ok=True)
+    path = temp / f"update_{datetime.now().timestamp()}_{secrets.token_hex(4)}.zip"
+    path.write_bytes(data)
+    try:
+        return update_center.stage(path, file.filename or "update.zip")
+    finally:
+        path.unlink(missing_ok=True)
+
+
+@app.delete("/api/update/staged")
+def update_cancel(request: Request):
+    require_host(request)
+    return update_center.cancel()
 
 
 @app.post("/api/host/login")
 def host_login(payload: HostLogin):
     if settings.app_mode != "server":
-        return {"ok": True, "host": True, "host_claimed": True}
-    if store.host_claimed():
-        raise HTTPException(409, "This Cocklebur instance already has a Host. Use Host recovery on a new browser.")
-    if not settings.host_key or not hmac.compare_digest(payload.key, settings.host_key):
-        raise HTTPException(403, "Invalid Host bootstrap key")
-    host, access, recovery = store.claim_host(payload.display_name)
-    r = JSONResponse({"ok": True, "host": True, "host_claimed": True, "host_profile": host, "host_recovery_code": recovery})
-    set_host_cookie(r, access)
-    return r
-
-
-@app.post("/api/host/recover")
-def host_recover(payload: HostRecover):
-    if settings.app_mode != "server":
         return {"ok": True, "host": True}
-    host, access, recovery = store.recover_host(payload.code)
-    r = JSONResponse({"ok": True, "host": True, "host_claimed": True, "host_profile": host, "host_recovery_code": recovery})
-    set_host_cookie(r, access)
+    if not settings.host_key or not hmac.compare_digest(payload.key, settings.host_key):
+        raise HTTPException(403, "Invalid Host key")
+    r = JSONResponse({"ok": True, "host": True})
+    set_host_cookie(r)
     return r
-
-
-@app.post("/api/host/recovery/rotate")
-def rotate_host_recovery(request: Request):
-    require_host(request)
-    return {"host_recovery_code": store.rotate_host_recovery()}
 
 
 @app.post("/api/host/logout")
@@ -224,22 +181,6 @@ def host_logout():
     r = JSONResponse({"ok": True})
     r.delete_cookie(HOST_COOKIE, path="/")
     return r
-
-
-@app.get("/api/instance/people")
-def instance_people(request: Request):
-    require_host(request)
-    return store.instance_people_catalog()
-
-
-@app.patch("/api/instance/people/{project_id}/{person_id}/permissions")
-def patch_instance_permissions(project_id: str, person_id: str, payload: InstancePermissionPatch, request: Request):
-    require_host(request)
-    return store.set_instance_permissions(
-        project_id, person_id,
-        can_create_projects=payload.can_create_projects,
-        can_import_projects=payload.can_import_projects,
-    )
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -313,7 +254,7 @@ def local_projects():
 @app.post("/api/projects")
 def create_project(payload: ProjectCreate, request: Request, response: Response):
     if settings.app_mode == "server":
-        require_instance_permission(request, "create")
+        require_host(request)
     data = payload.model_dump()
     if settings.app_mode == "server":
         data["mode"] = "server"
@@ -327,7 +268,7 @@ def create_project(payload: ProjectCreate, request: Request, response: Response)
 @app.post("/api/projects/import")
 async def import_project(request: Request, response: Response, file: UploadFile = File(...), allow_new_id_on_conflict: bool = Form(False)):
     if settings.app_mode == "server":
-        require_instance_permission(request, "import")
+        require_host(request)
     max_bytes = settings.max_import_mb * 1024 * 1024
     data = await file.read(max_bytes + 1)
     if len(data) > max_bytes:
@@ -352,6 +293,109 @@ async def import_project(request: Request, response: Response, file: UploadFile 
         return result
     finally:
         path.unlink(missing_ok=True)
+
+
+def _exportable_project_ids(request: Request) -> list[str]:
+    if settings.app_mode == "local":
+        return [p["id"] for p in store.list_local_projects()]
+    ids: list[str] = []
+    for pid in store.list_project_ids():
+        try:
+            person = store.resolve_access(pid, request.cookies.get(cookie_name(pid)))
+        except Exception:
+            person = None
+        if person and person.get("role") in {"owner", "member"}:
+            ids.append(pid)
+    return ids
+
+
+@app.get("/api/projects/export-bundle")
+def export_workspace_bundle(request: Request):
+    ids = _exportable_project_ids(request)
+    if not ids:
+        raise HTTPException(400, "No accessible Owner/Member projects to export")
+    path, _meta = store.export_workspace_bundle(ids)
+    return FileResponse(path, filename=path.name, media_type="application/zip", background=BackgroundTask(path.unlink, missing_ok=True))
+
+
+@app.post("/api/projects/import/preflight")
+async def import_preflight(request: Request, files: list[UploadFile] = File(...)):
+    if settings.app_mode == "server":
+        require_host(request)
+    if not files:
+        raise HTTPException(400, "Choose at least one project pack or Workspace Bundle")
+    imports_root = settings.data_dir / ".imports"
+    imports_root.mkdir(exist_ok=True)
+    cutoff = datetime.now().timestamp() - 24 * 60 * 60
+    for stale in imports_root.glob("batch_*"):
+        try:
+            if stale.is_dir() and stale.stat().st_mtime < cutoff:
+                shutil.rmtree(stale, ignore_errors=True)
+        except OSError:
+            pass
+    batch_id = "batch_" + secrets.token_hex(8)
+    batch_root = imports_root / batch_id
+    batch_root.mkdir(parents=True, exist_ok=False)
+    entries: list[dict[str, Any]] = []
+    try:
+        for upload_index, upload in enumerate(files):
+            data = await upload.read(settings.max_import_mb * 1024 * 1024 + 1)
+            if len(data) > settings.max_import_mb * 1024 * 1024:
+                entries.append({"item_id": f"item_{len(entries)}", "status": "Invalid pack", "detail": "Import exceeds configured limit", "source_name": upload.filename})
+                continue
+            src = batch_root / f"source_{upload_index}.zip"
+            src.write_bytes(data)
+            extract = batch_root / f"extract_{upload_index}"
+            extract.mkdir()
+            try:
+                packs = store.unpack_workspace_bundle(src, extract)
+                for pack in packs:
+                    item_id = f"item_{len(entries)}"
+                    target = batch_root / f"{item_id}.zip"
+                    shutil.copy2(pack, target)
+                    pre = store.preflight_pack(target)
+                    entries.append({**pre, "item_id": item_id, "file": target.name, "source_name": upload.filename})
+            except Exception as exc:
+                entries.append({"item_id": f"item_{len(entries)}", "status": "Invalid pack", "detail": str(exc), "source_name": upload.filename})
+        (batch_root / "batch.json").write_text(json.dumps({"batch_id": batch_id, "entries": entries}, ensure_ascii=False, indent=2), "utf-8")
+        return {"batch_id": batch_id, "entries": entries}
+    except Exception:
+        shutil.rmtree(batch_root, ignore_errors=True)
+        raise
+
+
+@app.post("/api/projects/import/commit")
+def import_commit(payload: WorkspaceImportCommit, request: Request, response: Response):
+    if settings.app_mode == "server":
+        require_host(request)
+    imports_root = (settings.data_dir / ".imports").resolve()
+    batch_root = (imports_root / payload.batch_id).resolve()
+    if imports_root not in batch_root.parents or not (batch_root / "batch.json").exists():
+        raise HTTPException(404, "Import batch not found")
+    data = json.loads((batch_root / "batch.json").read_text("utf-8"))
+    results: list[dict[str, Any]] = []
+    try:
+        for entry in data.get("entries", []):
+            if entry.get("status") not in {"Ready", "Duplicate ID"}:
+                results.append({**entry, "result": "skipped"})
+                continue
+            if entry.get("status") == "Duplicate ID" and payload.duplicate_policy == "skip":
+                results.append({**entry, "result": "skipped"})
+                continue
+            pack = batch_root / entry["file"]
+            project = store.import_project(pack, allow_new_id_on_conflict=(payload.duplicate_policy == "new_id"), target_mode=settings.app_mode)
+            owners = [person for person in store.people(project["id"]) if person.get("role") == "owner"]
+            recovery = None
+            if owners:
+                owner = owners[0]
+                recovery = store.rotate_owner_recovery(project["id"], owner["id"], "system")
+                if project.get("mode") == "server":
+                    access = store.issue_access(project["id"], owner["id"], "system")
+                    set_access_cookie(response, project["id"], access)
+            results.append({**entry, "result": "imported", "imported_project_id": project["id"], "owner_recovery_code": recovery})
+        return {"results": results}
+    finally:
+        shutil.rmtree(batch_root, ignore_errors=True)
 
 
 @app.get("/api/projects/{project_id}")
@@ -485,9 +529,13 @@ def cards(project_id: str, request: Request, type: str | None = None, status: st
 
 
 @app.post("/api/projects/{project_id}/cards")
-def add_card(project_id: str, payload: CardCreate, request: Request):
+def add_card(project_id: str, payload: CardCreate, request: Request, response: Response):
     actor = require(project_id, request, {"owner", "member"})
-    return store.create_card(project_id, payload.model_dump(), actor["id"])
+    key = request.headers.get("X-Idempotency-Key")
+    card, replayed = store.create_card(project_id, payload.model_dump(), actor["id"], key)
+    if replayed:
+        response.headers["X-Idempotency-Replayed"] = "true"
+    return card
 
 
 @app.get("/api/projects/{project_id}/cards/{card_id}")

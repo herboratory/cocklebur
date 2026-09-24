@@ -1,18 +1,26 @@
-# Release
+# Cocklebur Server Release
 
-- **Release ID:** SERVER-INSTANCE-AUTH-01
-- **Version:** 0.2.16
+- **Release ID:** SERVER-0.2.17-WORKSPACE-NOTE-UPDATE-STAGING
+- **Version:** 0.2.17
 - **Project pack format:** 1.0
-- **Distribution:** Docker/self-hosted Server
+- **Workspace Bundle format:** 1.0
+- **Server Update staging format:** 1.0
+- **Distribution:** Docker / self-hosted Server source package
 
-## Scope
+## Included scope
 
-- One-time Host bootstrap claim backed by persistent instance auth state.
-- Host recovery code with rotation and multi-browser Host sessions.
-- Host is instance-level and remains separate from project Owner / Member / Viewer.
-- Independent delegated instance permissions: Create projects / Import project packs.
-- Create/Import grants attach to an existing project identity and do not change that project's role.
-- Project creator/importer receives Owner access to the newly created/imported project.
-- Removing a project identity or deleting its source project removes associated delegated grants.
-- Infrastructure Admin / Deployer remains outside Cocklebur app roles.
-- Project pack format stays at 1.0; instance auth/grants are not exported with project packs.
+- Workspace Bundle export for all Owner/Member projects accessible in the current browser.
+- Multi-pack / Workspace Bundle import with preflight: Ready, Duplicate ID, Invalid pack, Incompatible version.
+- Retry-safe Card creation using browser-side Save locking plus server-side idempotency keys.
+- Third Card type: Note. Notes keep title/content/tags, project visibility/edit access, and Active/Archived lifecycle without task status/assignee/event fields.
+- New Project modal spacing polish.
+- Host-only Update Center foundation: upload, path/checksum validation, minimum/target version checks, pre-update data backup, and staging.
+- Update Center intentionally does **not** replace application files, invoke Docker/Kubernetes, or restart the server. A separately privileged updater is required for apply/restart/rollback.
+
+## Data compatibility
+
+Project Pack `format_version` remains **1.0**. Note is stored as a normal Card JSON with `type=note`; no second project schema is introduced. Workspace Bundle is a container of ordinary Project Pack 1.0 ZIPs. Runtime idempotency metadata and update-staging metadata are not exported as project data.
+
+## Update safety boundary
+
+Project data stays under `POPUP_DATA_DIR`. Update packages are forbidden from containing `data/`, `.env`, instance secret/id files, Host credentials, or instance auth state. Staging creates a compressed data backup under `.update_backups/` before declaring an update staged. Checksums protect package integrity, but 0.2.17 does not yet implement publisher-signature verification.

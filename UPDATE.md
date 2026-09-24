@@ -1,27 +1,49 @@
 # Updating Cocklebur Server
 
-Project data and instance auth state live under the persistent data directory (`/data` in the supplied Docker configuration).
+Project data lives in the persistent server data volume, outside the application image.
 
 ## Before updating
 
-1. Export important active projects.
-2. Back up the persistent Cocklebur volume.
-3. Record the current app version.
+1. Export every important active project.
+2. Back up the Docker volume / server data directory.
+3. Record the current Cocklebur version and keep the previous release package until the update is verified.
 
-## Docker
+## Docker update
+
+Replace the application source with the new release, preserve your `.env`, then:
 
 ```bash
 docker compose down
 docker compose build --pull
 docker compose up -d
+curl http://127.0.0.1:${POPUP_HOST_PORT:-8000}/health
 ```
 
-Do **not** use `docker compose down -v` for a normal update.
+`docker compose down` does not remove the named volume.
 
-## Updating from 0.2.15 to 0.2.16
+**Do not use `docker compose down -v` during a normal update.** `-v` deletes the Cocklebur volume.
 
-0.2.16 introduces persistent instance-level Host auth.
+## Direct Python deployment
 
-Existing project data remains compatible and project pack format stays `1.0`. On the first 0.2.16 start, an older server has no `.instance_auth.json` yet, so the instance appears **unclaimed**. Use the existing `COCKLEBUR_HOST_KEY` (or the new `COCKLEBUR_BOOTSTRAP_KEY`) once to **Claim Host**, then save the generated Host recovery code.
+Replace application code, reinstall `requirements.txt`, then restart the single server worker.
 
-After claim, the bootstrap key is no longer accepted for Host login.
+## Project-pack compatibility
+
+Project packs declare `format_version`. This release uses format `1.0`; older compatible packs are normalized during import where required.
+
+
+## Server 0.2.17 Update Center staging
+
+A Host may open **Update center** on the Projects page and upload a Cocklebur Server Update ZIP. 0.2.17 validates paths/checksums/version compatibility, creates a pre-update data backup, and stages the package under `POPUP_DATA_DIR/.updates/`.
+
+This is intentionally a **staging boundary only**. The web process does not receive Docker socket access, Kubernetes credentials, arbitrary shell access, or self-restart authority. Application replacement/restart/health-check/rollback remains the job of a separately privileged deployer/updater.
+
+See `UPDATE_PACKAGE_FORMAT.md`. A helper is included:
+
+```bash
+python scripts/build_update_package.py \
+  --source ./release-payload \
+  --minimum-source-version 0.2.17 \
+  --target-version 0.2.18 \
+  --output ./cocklebur-server-update-0.2.18.zip
+```

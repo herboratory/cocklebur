@@ -15,6 +15,7 @@ class Settings:
     max_upload_mb: int
     max_import_mb: int
     default_project_quota_mb: int
+    max_update_mb: int
     instance_id: str
     host_key: str | None
 
@@ -46,7 +47,7 @@ def load_settings() -> Settings:
     host_key: str | None = None
     if app_mode == "server":
         host_file = data_dir / ".host_key"
-        env_host_key = os.getenv("COCKLEBUR_BOOTSTRAP_KEY", "").strip() or os.getenv("COCKLEBUR_HOST_KEY", "").strip()
+        env_host_key = os.getenv("COCKLEBUR_HOST_KEY", "").strip()
         if env_host_key:
             host_key = env_host_key
         elif host_file.exists():
@@ -67,6 +68,7 @@ def load_settings() -> Settings:
         max_upload_mb=int(os.getenv("POPUP_MAX_UPLOAD_MB", "50")),
         max_import_mb=int(os.getenv("POPUP_IMPORT_MAX_MB", "2048")),
         default_project_quota_mb=int(os.getenv("POPUP_PROJECT_QUOTA_MB", "1024")),
+        max_update_mb=int(os.getenv("COCKLEBUR_UPDATE_MAX_MB", "512")),
         instance_id=instance_id,
         host_key=host_key,
     )
