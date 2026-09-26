@@ -79,6 +79,13 @@ docker build -t "$IMAGE_NAME" -f "${ROOT_DIR}/Dockerfile" "$ROOT_DIR"
 echo "推送映像檔至 ${REGISTRY}..."
 docker push "$IMAGE_NAME"
 
+if [[ "$TAG" != "latest" ]]; then
+  LATEST_IMAGE="${REGISTRY}/cocklebur-server:latest"
+  echo "同步標記並推送 latest 標籤至 ${LATEST_IMAGE}..."
+  docker tag "$IMAGE_NAME" "$LATEST_IMAGE"
+  docker push "$LATEST_IMAGE"
+fi
+
 echo "=========================================================="
 echo "映像檔推送完成: $IMAGE_NAME"
 echo "=========================================================="

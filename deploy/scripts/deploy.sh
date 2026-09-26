@@ -261,10 +261,14 @@ if [[ "$TOOL" == "kustomize" ]]; then
     MANIFESTS="$(echo "$MANIFESTS" | sed "s/${DEFAULT_DOMAIN}/${DOMAIN}/g")"
   fi
 
-  # 動態替換 Registry
+  # 動態替換 Registry 與 Tag
   if [[ -n "$REGISTRY" ]]; then
     echo "套用映像檔倉庫 ${REGISTRY}..."
     MANIFESTS="$(echo "$MANIFESTS" | sed -E "s@registry\.example\.com/(team|prod)@${REGISTRY}@g")"
+  fi
+  if [[ -n "$IMAGE_TAG" ]]; then
+    echo "套用映像檔標籤 ${IMAGE_TAG}..."
+    MANIFESTS="$(echo "$MANIFESTS" | sed -E "s@(${REGISTRY:-registry\.example\.com/(team|prod)}/cocklebur-server):[a-zA-Z0-9._-]+@\1:${IMAGE_TAG}@g")"
   fi
 
   # 動態替換 StorageClass
@@ -288,6 +292,8 @@ elif [[ "$TOOL" == "helm" ]]; then
   helm upgrade --install cocklebur "${ROOT_DIR}/deploy/helm/cocklebur" \
     --namespace "$NAMESPACE" \
     -f "${ROOT_DIR}/deploy/helm/cocklebur/values-${ENV}.yaml" \
+    --set image.repository="${REGISTRY:-registry.example.com/team}/cocklebur-server" \
+    --set image.tag="${IMAGE_TAG}" \
     --set config.baseUrl="${POPUP_BASE_URL}" \
     --set ingress.hosts[0].host="${DOMAIN}" \
     --set ingress.tls[0].hosts[0]="${DOMAIN}" \
