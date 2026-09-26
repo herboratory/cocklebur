@@ -37,7 +37,6 @@ Update packages may not contain runtime data or credentials, including:
 - `.env`
 - `.instance_secret`
 - `.instance_id`
-- `.host_key`
 - `.instance_auth.json`
 - `.git/` / `.github/`
 

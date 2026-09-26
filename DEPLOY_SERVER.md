@@ -22,7 +22,7 @@ POPUP_HOST_PORT=8000
 POPUP_BASE_URL=http://127.0.0.1:8000
 ```
 
-Generate a Host key, for example:
+Generate a one-time Host bootstrap key, for example:
 
 ```bash
 python3 -c "import secrets; print(secrets.token_urlsafe(32))"
@@ -31,7 +31,7 @@ python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 Put it in `.env`:
 
 ```dotenv
-COCKLEBUR_HOST_KEY=replace-with-your-random-value
+COCKLEBUR_BOOTSTRAP_KEY=replace-with-your-random-value
 ```
 
 Start:
@@ -42,7 +42,7 @@ docker compose ps
 curl http://127.0.0.1:8000/health
 ```
 
-Open `http://127.0.0.1:8000` and use **Host access** with the Host key before Create / Import becomes available.
+Open `http://127.0.0.1:8000` and use **Claim Host** with the bootstrap key. Save the Host recovery code shown after claim; the bootstrap key is not a permanent Host password.
 
 ## 2. Host port vs public URL
 
@@ -145,16 +145,12 @@ Host access is instance-level and separate from project Owner / Member / Viewer 
 Recommended stable configuration:
 
 ```dotenv
-COCKLEBUR_HOST_KEY=replace-with-a-long-random-secret
+COCKLEBUR_BOOTSTRAP_KEY=replace-with-a-long-random-secret
 ```
 
-If omitted, Cocklebur generates a persistent key in `/data/.host_key`. With Docker you can read it using:
+`COCKLEBUR_BOOTSTRAP_KEY` is required in Server mode. Cocklebur does not auto-generate a Host bootstrap credential.
 
-```bash
-docker compose exec popup-workspace cat /data/.host_key
-```
-
-Do not share the Host key with normal project collaborators.
+Do not share the Host bootstrap key or Host recovery code with normal project collaborators.
 
 ## 6. Direct Python deployment
 
@@ -165,7 +161,7 @@ pip install -r requirements.txt
 export POPUP_APP_MODE=server
 export POPUP_DATA_DIR=/srv/cocklebur-data
 export POPUP_BASE_URL=https://workspace.example.org
-export COCKLEBUR_HOST_KEY='replace-with-a-long-random-secret'
+export COCKLEBUR_BOOTSTRAP_KEY='replace-with-a-long-random-secret'
 uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1 --proxy-headers
 ```
 

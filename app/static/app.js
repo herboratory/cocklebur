@@ -128,34 +128,78 @@
     $('#continueAfterRecovery').onclick=()=>{closeDialog();onContinue?.();};
   }
 
+  function showHostRecoveryCodeDialog(result, onContinue){
+    const code=result?.host_recovery_code;
+    if(!code){onContinue?.();return;}
+    openDialog(`${dialogHeader('INSTANCE HOST','Save your Host recovery code')}<div class="banner warn"><strong>This code recovers Instance Host access on another browser.</strong><br>The bootstrap key is not accepted after the instance has been claimed. Save this code somewhere safe; recovery rotates it.</div><label>Host recovery code<input id="hostRecoveryCodeValue" value="${esc(code)}" readonly></label><div class="modal-actions"><button type="button" class="btn secondary" id="copyHostRecoveryCode">Copy code</button><button type="button" class="btn" id="continueAfterHostRecovery">I saved it</button></div>`);
+    $('#copyHostRecoveryCode').onclick=()=>copyText(code);
+    $('#continueAfterHostRecovery').onclick=()=>{closeDialog();onContinue?.();};
+  }
+
   async function initHome(){
     const mode=document.body.dataset.mode;
-    let host=mode!=='server';
+    let access={host:mode!=='server',host_claimed:mode!=='server',can_create_projects:true,can_import_projects:true,sources:[]};
     const projectDialog=$('#projectDialog'), projectForm=$('#projectForm');
     const modeSelect=$('#projectForm select[name=mode]');
     const updateStorageVisibility=()=>{const row=$('#customStorageRow');if(row)row.hidden=!(mode==='local'&&modeSelect.value==='local'&&window.pywebview?.api?.choose_folder);};
-    const applyHostUI=()=>{
-      $$('.host-only').forEach(el=>el.style.display=host?'':'none');
-      const btn=$('#hostAccessBtn'); if(btn)btn.textContent=host?'Host access ✓':'Host access';
-      $('#modeNotice').textContent=mode==='local'
-        ?'Local mode — project data stays on this machine unless you export or share it.'
-        :host?'Server mode — Host access is enabled in this browser.':'Server mode — collaborators can only open projects they have joined. Creating or importing projects requires Host access.';
+    const applyInstanceUI=()=>{
+      $$('.host-admin-only').forEach(el=>el.style.display=access.host?'':'none');
+      $$('.create-permission').forEach(el=>el.style.display=access.can_create_projects?'':'none');
+      $$('.import-permission').forEach(el=>el.style.display=access.can_import_projects?'':'none');
+      const btn=$('#hostAccessBtn');
+      if(btn)btn.textContent=access.host?'Host access ✓':access.host_claimed?'Host recovery':'Claim Host';
+      if(mode==='local'){
+        $('#modeNotice').textContent='Local mode — project data stays on this machine unless you export or share it.';
+      }else if(access.host){
+        $('#modeNotice').textContent='Server mode — Instance Host access is enabled. Host can manage instance permissions; project roles remain separate.';
+      }else if(access.can_create_projects||access.can_import_projects){
+        const caps=[access.can_create_projects?'Create projects':'',access.can_import_projects?'Import packs':''].filter(Boolean).join(' + ');
+        $('#modeNotice').textContent=`Server mode — delegated instance permission enabled: ${caps}. Your Owner/Member/Viewer roles remain project-specific.`;
+      }else{
+        $('#modeNotice').textContent='Server mode — open an invitation or recover project access. Creating or importing projects requires an instance permission.';
+      }
     };
-    if(mode==='server'){
-      try{host=Boolean((await api('/api/host/status')).host);}catch{host=false;}
-    }
-    applyHostUI();
+    const refreshAccess=async()=>{
+      if(mode!=='server'){applyInstanceUI();return access;}
+      try{access=await api('/api/instance/access');}catch{access={host:false,host_claimed:false,can_create_projects:false,can_import_projects:false,sources:[]};}
+      applyInstanceUI();return access;
+    };
+    await refreshAccess();
 
     $('#newProjectBtn').onclick=()=>projectDialog.showModal();
     $$('.project-dialog-cancel',projectDialog).forEach(b=>b.onclick=()=>projectDialog.close());
     modeSelect.addEventListener('change',updateStorageVisibility); updateStorageVisibility();
     window.addEventListener('pywebviewready',()=>{updateStorageVisibility();const b=$('#chooseFolderBtn');if(b)b.onclick=async()=>{try{const path=await window.pywebview.api.choose_folder();if(path)$('#storagePath').value=path;}catch{toast('Could not open folder picker',true);}};});
 
-    $('#hostAccessBtn')?.addEventListener('click',()=>{
-      if(host){toast('Host access is already enabled');return;}
-      openDialog(`${dialogHeader('SERVER HOST','Unlock project creation')}<p class="muted">Enter the Host key for this Cocklebur server. This is separate from project Owner/Member roles.</p><form id="hostLoginForm" class="form-stack"><label>Host key<input name="key" type="password" autocomplete="off" required autofocus></label><div class="modal-actions"><button type="button" class="btn secondary" data-close-dialog>Cancel</button><button class="btn">Unlock Host access</button></div></form>`);
-      $('#hostLoginForm').onsubmit=async e=>{e.preventDefault();try{await api('/api/host/login',{method:'POST',body:{key:new FormData(e.currentTarget).get('key')}});host=true;applyHostUI();closeDialog();toast('Host access enabled');}catch(err){toast(err.message,true);}};
-    });
+    const openHostPanel=async()=>{
+      if(access.host){
+        let status={};try{status=await api('/api/host/status');}catch{}
+        const name=status.host_profile?.display_name||'Host';
+        openDialog(`${dialogHeader('INSTANCE HOST','Host access')}<div class="banner"><strong>${esc(name)}</strong><br>Host manages the Cocklebur instance. Project ownership remains separate.</div><div class="form-stack"><button type="button" class="btn secondary" id="rotateHostRecoveryBtn">Generate new Host recovery code</button><button type="button" class="btn secondary" id="openInstancePermissionsFromHost">Manage instance permissions</button></div><div class="modal-actions"><button type="button" class="btn secondary" data-close-dialog>Close</button><button type="button" class="btn danger" id="hostLogoutBtn">Sign out Host access</button></div>`);
+        $('#rotateHostRecoveryBtn').onclick=async()=>{try{const r=await api('/api/host/recovery/rotate',{method:'POST'});showHostRecoveryCodeDialog(r,()=>refreshAccess());}catch(err){toast(err.message,true);}};
+        $('#openInstancePermissionsFromHost').onclick=()=>{closeDialog();openInstancePermissions();};
+        $('#hostLogoutBtn').onclick=async()=>{try{await api('/api/host/logout',{method:'POST'});closeDialog();await refreshAccess();toast('Host access signed out');}catch(err){toast(err.message,true);}};
+        return;
+      }
+      if(!access.host_claimed){
+        openDialog(`${dialogHeader('INSTANCE HOST','Claim this Cocklebur instance')}<div class="banner warn"><strong>The bootstrap key works only for the first Host claim.</strong><br>After claim, save the Host recovery code Cocklebur gives you. Clearing browser cookies removes the local Host session.</div><form id="hostClaimForm" class="form-stack"><label>Host display name<input name="display_name" maxlength="100" value="Host" required></label><label>Bootstrap key<input name="key" type="password" autocomplete="off" required></label><div class="modal-actions"><button type="button" class="btn secondary" data-close-dialog>Cancel</button><button class="btn">Claim Host</button></div></form>`);
+        $('#hostClaimForm').onsubmit=async e=>{e.preventDefault();const fd=new FormData(e.currentTarget);try{const r=await api('/api/host/claim',{method:'POST',body:{key:String(fd.get('key')||''),display_name:String(fd.get('display_name')||'Host')}});closeDialog();await refreshAccess();showHostRecoveryCodeDialog(r,()=>refreshAccess());}catch(err){toast(err.message,true);}};
+      }else{
+        openDialog(`${dialogHeader('INSTANCE HOST','Recover Host access')}<div class="banner warn"><strong>The bootstrap key is disabled after Host claim.</strong><br>Use the current Host recovery code on a new browser. Successful recovery keeps existing Host sessions and rotates the recovery code.</div><form id="hostRecoverForm" class="form-stack"><label>Host recovery code<input name="code" autocomplete="off" placeholder="XXXXX-XXXXX-XXXXX-XXXXX" required autofocus></label><div class="modal-actions"><button type="button" class="btn secondary" data-close-dialog>Cancel</button><button class="btn">Recover Host access</button></div></form>`);
+        $('#hostRecoverForm').onsubmit=async e=>{e.preventDefault();try{const r=await api('/api/host/recover',{method:'POST',body:{code:String(new FormData(e.currentTarget).get('code')||'')}});closeDialog();await refreshAccess();showHostRecoveryCodeDialog(r,()=>refreshAccess());}catch(err){toast(err.message,true);}};
+      }
+    };
+    $('#hostAccessBtn')?.addEventListener('click',openHostPanel);
+
+    async function openInstancePermissions(){
+      try{
+        const people=await api('/api/instance/people');
+        const body=people.length?people.map(p=>`<div class="instance-person-row" data-project-id="${esc(p.project_id)}" data-person-id="${esc(p.person_id)}"><div class="instance-person-main"><strong>${esc(p.display_name)}</strong><span>${esc(p.project_name)} · ${esc(p.role)}</span></div><label class="instance-cap"><input type="checkbox" data-cap="create" ${p.can_create_projects?'checked':''}> Create</label><label class="instance-cap"><input type="checkbox" data-cap="import" ${p.can_import_projects?'checked':''}> Import</label><button class="btn compact secondary instance-cap-save" type="button">Save</button></div>`).join(''):'<div class="empty">No project identities exist yet. People appear here after they join or own a Server project.</div>';
+        openDialog(`${dialogHeader('INSTANCE','Instance permissions')}<p class="muted">Create / Import are instance-level capabilities added on top of a person’s project role. Granting them does not make that person Host or Owner of other projects.</p><div class="banner"><strong>Host</strong> always has Create + Import. Infrastructure administrators are outside Cocklebur’s app roles.</div><div class="instance-people-list">${body}</div><div class="modal-actions"><button type="button" class="btn secondary" data-close-dialog>Close</button></div>`);
+        $$('.instance-cap-save').forEach(btn=>btn.onclick=async()=>{const row=btn.closest('.instance-person-row'),projectId=row.dataset.projectId,personId=row.dataset.personId;const canCreate=$('[data-cap="create"]',row).checked,canImport=$('[data-cap="import"]',row).checked;try{await api(`/api/instance/people/${encodeURIComponent(projectId)}/${encodeURIComponent(personId)}/permissions`,{method:'PATCH',body:{can_create_projects:canCreate,can_import_projects:canImport}});toast('Instance permissions updated');}catch(err){toast(err.message,true);}});
+      }catch(err){toast(err.message,true);}
+    }
+    $('#instancePermissionsBtn')?.addEventListener('click',openInstancePermissions);
 
     $('#ownerRecoveryBtn')?.addEventListener('click',()=>{
       const remembered=JSON.parse(lsGet('pw_projects','[]'));
@@ -199,7 +243,7 @@
       if(mode==='local'){try{items=await api('/api/local/projects');}catch(err){toast(err.message,true);}}
       else{const ids=JSON.parse(lsGet('pw_projects','[]'));items=(await Promise.all(ids.map(async id=>{try{return await api(`/api/projects/${id}/summary`);}catch{return null;}}))).filter(Boolean);}
       const grid=$('#projectGrid');
-      if(!items.length){grid.innerHTML=`<div class="empty-card"><div><strong>No accessible projects in this browser.</strong><p class="muted">${mode==='server'?'Open an invitation, recover Owner access, or use Host access to create/import a project.':'Create a project or import a project pack.'}</p></div></div>`;return;}
+      if(!items.length){grid.innerHTML=`<div class="empty-card"><div><strong>No accessible projects in this browser.</strong><p class="muted">${mode==='server'?'Open an invitation, recover project access, or use an authorized Create / Import action.':'Create a project or import a project pack.'}</p></div></div>`;return;}
       grid.innerHTML=items.map(p=>`<a class="project-card" href="/project/${p.id}"><div><span class="status-pill">${esc(p.status||'active')}</span></div><h3>${esc(p.name)}</h3><p>${esc(p.description||'No description yet.')}</p><div class="project-meta"><span>${esc(p.role||p.mode||'local')}</span><span>${p.expiry?`Ends ${esc(fmtShortDate(p.expiry))}`:'No end date'}</span></div></a>`).join('');
     }
   }

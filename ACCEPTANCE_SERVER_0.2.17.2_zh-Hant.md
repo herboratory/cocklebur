@@ -1,4 +1,15 @@
-# Cocklebur Server 0.2.17 人工驗收
+# Cocklebur Server 0.2.17.2 人工驗收
+
+## 0. Host lifecycle / recovery hotfix
+
+1. 使用全新 `/data` 啟動，`GET /health` 應顯示 `host_claimed: false`。
+2. 首次按 **Claim Host**，使用 `COCKLEBUR_BOOTSTRAP_KEY` 成功後必須顯示 Host recovery code。
+3. 清除 browser cookies 或換一個乾淨 browser 後，Host 按鈕應顯示 **Host recovery**，bootstrap key 不再被接受。
+4. 使用剛保存的 Host recovery code 應恢復 Host access，並立即產生一個新的 recovery code；舊 code 必須失效。
+5. 從 0.2.16 保留 `.instance_auth.json` 升級到 0.2.17.2 時，既有 current recovery code 應仍可使用。
+6. 若 Host session 與 recovery code 都遺失，infra admin 可執行：
+   `python -m app.admin reset-host --yes`
+   它必須先 backup `.instance_auth.json`，只清 Host claim，保留 projects 與 instance grants。
 
 ## A. New Project spacing
 
@@ -54,3 +65,8 @@
 - Announcements / Discussion / Files
 - single Project Pack export/import
 - archive / close / delete lifecycle
+
+## Credential naming cleanup
+
+- Server mode 只設定 `COCKLEBUR_BOOTSTRAP_KEY` 可正常啟動。
+- 兩者都沒設定必須啟動失敗。

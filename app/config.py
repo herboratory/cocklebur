@@ -17,7 +17,7 @@ class Settings:
     default_project_quota_mb: int
     max_update_mb: int
     instance_id: str
-    host_key: str | None
+    bootstrap_key: str | None
 
 
 def load_settings() -> Settings:
@@ -44,21 +44,13 @@ def load_settings() -> Settings:
     else:
         instance_id = secrets.token_hex(16)
         instance_file.write_text(instance_id, "utf-8")
-    host_key: str | None = None
+    bootstrap_key: str | None = None
     if app_mode == "server":
-        host_file = data_dir / ".host_key"
-        env_host_key = os.getenv("COCKLEBUR_HOST_KEY", "").strip()
-        if env_host_key:
-            host_key = env_host_key
-        elif host_file.exists():
-            host_key = host_file.read_text("utf-8").strip()
-        else:
-            host_key = secrets.token_urlsafe(24)
-            host_file.write_text(host_key, "utf-8")
-            try:
-                os.chmod(host_file, 0o600)
-            except OSError:
-                pass
+        bootstrap_key = os.getenv("COCKLEBUR_BOOTSTRAP_KEY", "").strip() or None
+        if not bootstrap_key:
+            raise RuntimeError(
+                "COCKLEBUR_BOOTSTRAP_KEY is required when POPUP_APP_MODE=server"
+            )
 
     return Settings(
         data_dir=data_dir,
@@ -70,5 +62,5 @@ def load_settings() -> Settings:
         default_project_quota_mb=int(os.getenv("POPUP_PROJECT_QUOTA_MB", "1024")),
         max_update_mb=int(os.getenv("COCKLEBUR_UPDATE_MAX_MB", "512")),
         instance_id=instance_id,
-        host_key=host_key,
+        bootstrap_key=bootstrap_key,
     )

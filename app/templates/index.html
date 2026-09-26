@@ -27,11 +27,11 @@
         <p class="subtitle">Small workspaces for things that have a beginning, a middle, and an end.</p>
       </div>
       <div class="header-actions">
-        {% if mode == 'server' %}<button class="btn secondary" id="hostAccessBtn">Host access</button><button class="btn secondary" id="ownerRecoveryBtn">Owner recovery</button>{% endif %}
-        <button class="btn{% if mode == 'server' %} host-only{% endif %}" id="newProjectBtn">New project</button>
+        {% if mode == 'server' %}<button class="btn secondary" id="hostAccessBtn">Host access</button><button class="btn secondary host-admin-only" id="instancePermissionsBtn">Instance permissions</button><button class="btn secondary" id="ownerRecoveryBtn">Owner recovery</button>{% endif %}
+        <button class="btn{% if mode == 'server' %} create-permission{% endif %}" id="newProjectBtn">New project</button>
         <button class="btn secondary" id="exportBundleBtn">Export accessible</button>
-        <button class="btn secondary{% if mode == 'server' %} host-only{% endif %}" id="importBtn">Import</button>
-        {% if mode == 'server' %}<button class="btn secondary host-only" id="updateCenterBtn">Update center</button>{% endif %}
+        <button class="btn secondary{% if mode == 'server' %} import-permission{% endif %}" id="importBtn">Import</button>
+        {% if mode == 'server' %}<button class="btn secondary host-admin-only" id="updateCenterBtn">Update center</button>{% endif %}
         <input id="importFile" type="file" accept=".zip" multiple hidden>
       </div>
     </section>

@@ -1,3 +1,23 @@
+# 0.2.17.2 — Host credential cleanup
+
+- Uses one deployment credential name only: `COCKLEBUR_BOOTSTRAP_KEY`.
+- Uses a single explicit deployment bootstrap credential with no credential-name fallback.
+- Server mode now requires an explicit `COCKLEBUR_BOOTSTRAP_KEY`; missing configuration fails startup clearly.
+- Renames the internal setting to `bootstrap_key` and the first-claim endpoint to `/api/host/claim` to match the actual lifecycle.
+- Keeps the 0.2.16/0.2.17.1 Host lifecycle: bootstrap claim → browser Host session → rotating Host recovery code.
+- Keeps break-glass `python -m app.admin reset-host --yes` and all 0.2.17 functionality.
+
+# 0.2.17.1 — Host recovery hotfix
+
+- Restores the 0.2.16 Instance Host state model (`.instance_auth.json`).
+- Restores one-time bootstrap claim, Host recovery, recovery rotation, and multi-browser Host sessions.
+- Restored `COCKLEBUR_BOOTSTRAP_KEY` as the bootstrap configuration used by this hotfix line.
+- Restores delegated instance Create / Import permissions from 0.2.16.
+- Adds `host_claimed` to `/health` and `/api/instance/access`.
+- Adds break-glass `python -m app.admin reset-host --yes`, which backs up auth state and preserves project data/grants.
+- Adds regression coverage for 0.2.16 Host state → 0.2.17.1 with cleared browser cookies.
+- Retains 0.2.17 Workspace Bundle, Note, idempotent Card save, UI spacing, and Update Center staging features.
+
 ## 0.2.17 — SERVER-WORKSPACE-NOTE-UPDATE-STAGING
 
 - Added Workspace Bundle export for all Owner/Member projects accessible in the browser, plus multi-pack / Workspace Bundle import preflight and duplicate handling.

@@ -1,6 +1,6 @@
 # Cocklebur Server — MVP
 
-**版本：** `PW-MVP-01-FINAL / 0.2.15-mvp`  
+**版本：** `0.2.17.2`  
 **Project pack format：** `1.0`
 
 Cocklebur Server 是一個輕量、可自行部署的 project workspace。核心原則是：**一個 project 同時間只有一份 canonical live copy**；大家在同一個 server project 上工作，結束時可以把整個 project 匯出成可攜 ZIP 帶走。
@@ -33,10 +33,10 @@ POPUP_HOST_PORT=8000
 POPUP_BASE_URL=http://127.0.0.1:8000
 ```
 
-穩定部署建議另外設定一組長而隨機的 Host key：
+穩定部署建議設定一組長而隨機、僅用於首次 Claim Host 的 bootstrap key：
 
 ```dotenv
-COCKLEBUR_HOST_KEY=換成你自己的長隨機secret
+COCKLEBUR_BOOTSTRAP_KEY=換成你自己的長隨機secret
 ```
 
 啟動：
@@ -92,7 +92,7 @@ Internet-facing deployment 請：
 - 維持單一 app worker；
 - 不要把 raw Docker port 直接公開到 Internet；
 - 備份 persistent volume；
-- 保護 Host key、invite link、recovery link 與 Owner recovery code。
+- 保護 Host bootstrap key、Host recovery code、invite link、recovery link 與 Owner recovery code。
 
 ## 文件
 
@@ -115,6 +115,6 @@ python scripts/package_guard.py
 它會檢查 Server 發布必需檔案、拒絕 runtime secrets / project data / cache，並在工具可用時做 Python / JavaScript syntax validation。
 
 
-## Server 0.2.17
+## Server 0.2.17.2
 
-Adds Workspace Bundle export/import, Note Cards, retry-safe Card creation, New Project spacing polish, and Host-only data-safe Update Center staging. Project Pack format remains 1.0.
+Adds Workspace Bundle export/import, Note Cards, retry-safe Card creation, New Project spacing polish, and Host-only data-safe Update Center staging. Host access uses a single explicit Bootstrap Key for first claim, browser Host sessions for normal use, and rotating Host recovery codes for recovery. Project Pack format remains 1.0.

@@ -19,7 +19,7 @@ For Internet-facing use:
 - keep the application port bound to localhost/private infrastructure;
 - run exactly **one application worker**;
 - protect the host machine and persistent data volume;
-- keep `COCKLEBUR_HOST_KEY`, `POPUP_SECRET_KEY`, invite/recovery links, and recovery codes private.
+- keep `COCKLEBUR_BOOTSTRAP_KEY`, Host recovery codes, `POPUP_SECRET_KEY`, invite/recovery links, and recovery codes private.
 
 The JSON/JSONL storage layer uses filesystem locking and assumes a single application writer process. The provided Docker command uses one worker.
 

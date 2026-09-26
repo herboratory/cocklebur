@@ -1,6 +1,6 @@
 # Cocklebur Server — MVP
 
-**Release:** `PW-MVP-01-FINAL / 0.2.15-mvp`  
+**Release:** `0.2.17.2`  
 **Project pack format:** `1.0`
 
 Cocklebur Server is a lightweight, self-hosted project workspace for bounded projects: keep one canonical live copy, collaborate in a browser, then export the whole project as a portable ZIP when the work is done.
@@ -33,10 +33,10 @@ POPUP_HOST_PORT=8000
 POPUP_BASE_URL=http://127.0.0.1:8000
 ```
 
-For a stable deployment, also set a long random Host key:
+For a stable deployment, set a long random one-time Host bootstrap key:
 
 ```dotenv
-COCKLEBUR_HOST_KEY=replace-with-a-long-random-secret
+COCKLEBUR_BOOTSTRAP_KEY=replace-with-a-long-random-secret
 ```
 
 Then start Cocklebur:
@@ -98,7 +98,7 @@ For Internet-facing use:
 - keep one app worker;
 - do not expose the raw Docker port publicly;
 - back up the persistent data volume;
-- protect the Host key, invite links, recovery links, and Owner recovery codes.
+- protect the Host bootstrap key, Host recovery code, invite links, recovery links, and Owner recovery codes.
 
 See `SECURITY.md`.
 
@@ -125,6 +125,6 @@ python scripts/package_guard.py
 It checks required server-release files, rejects runtime secrets/project data/caches, and validates Python/JavaScript syntax when the relevant tools are available.
 
 
-## Server 0.2.17
+## Server 0.2.17.2
 
-Adds Workspace Bundle export/import, Note Cards, retry-safe Card creation, New Project spacing polish, and Host-only data-safe Update Center staging. Project Pack format remains 1.0.
+Adds Workspace Bundle export/import, Note Cards, retry-safe Card creation, New Project spacing polish, and Host-only data-safe Update Center staging. Host access uses a single explicit Bootstrap Key for first claim, browser Host sessions for normal use, and rotating Host recovery codes for recovery. Project Pack format remains 1.0.

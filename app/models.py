@@ -115,8 +115,18 @@ class SelfPatch(BaseModel):
     display_name: str = Field(min_length=1, max_length=100)
 
 
-class HostLogin(BaseModel):
+class HostClaim(BaseModel):
     key: str = Field(min_length=1, max_length=500)
+    display_name: str = Field(default="Host", min_length=1, max_length=100)
+
+
+class HostRecover(BaseModel):
+    code: str = Field(min_length=8, max_length=200)
+
+
+class InstancePermissionPatch(BaseModel):
+    can_create_projects: bool = False
+    can_import_projects: bool = False
 
 
 class OwnerRecover(BaseModel):

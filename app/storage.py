@@ -22,6 +22,7 @@ from .security import new_recovery_code, new_token, safe_filename, safe_id, toke
 
 FORMAT_NAME = "popup-workspace-pack"
 FORMAT_VERSION = "1.0"
+INSTANCE_AUTH_VERSION = 1
 
 
 class NotFoundError(Exception):
@@ -360,6 +361,192 @@ class CapsuleStore:
             out.append(item)
             if len(out) >= limit:
                 break
+        return out
+
+    # ---- Instance Host / delegated instance permissions ----
+    def _instance_auth_path(self) -> Path:
+        return self.root / ".instance_auth.json"
+
+    @staticmethod
+    def _instance_auth_default() -> dict[str, Any]:
+        return {"version": INSTANCE_AUTH_VERSION, "host": None, "grants": []}
+
+    def _read_instance_auth(self) -> dict[str, Any]:
+        path = self._instance_auth_path()
+        obj = self._read_json(path, self._instance_auth_default()) if path.exists() else self._instance_auth_default()
+        if not isinstance(obj, dict):
+            raise ValidationError("Corrupt instance auth state")
+        obj.setdefault("version", INSTANCE_AUTH_VERSION)
+        obj.setdefault("host", None)
+        obj.setdefault("grants", [])
+        if not isinstance(obj["grants"], list):
+            obj["grants"] = []
+        return obj
+
+    def host_claimed(self) -> bool:
+        return bool(self._read_instance_auth().get("host"))
+
+    @staticmethod
+    def _public_host(host: dict[str, Any] | None) -> dict[str, Any] | None:
+        if not host:
+            return None
+        return {k: host.get(k) for k in ["display_name", "claimed_at", "recovery_updated_at"]}
+
+    def claim_host(self, display_name: str) -> tuple[dict[str, Any], str, str]:
+        path = self._instance_auth_path()
+        lock = FileLock(str(path) + ".lock", timeout=15)
+        with lock:
+            obj = self._read_json(path, self._instance_auth_default()) if path.exists() else self._instance_auth_default()
+            if obj.get("host"):
+                raise ConflictError("This Cocklebur instance already has a Host")
+            access = new_token()
+            recovery = new_recovery_code()
+            ts = now_iso()
+            host = {
+                "display_name": (display_name or "Host").strip()[:100] or "Host",
+                "claimed_at": ts,
+                "access_hashes": [token_hash(access)],
+                "recovery_hash": token_hash(recovery),
+                "recovery_updated_at": ts,
+            }
+            obj = {"version": INSTANCE_AUTH_VERSION, "host": host, "grants": obj.get("grants", []) or []}
+            self._atomic_write_json(path, obj)
+            return self._public_host(host) or {}, access, recovery
+
+    def resolve_host(self, token: str | None) -> dict[str, Any] | None:
+        if not token:
+            return None
+        host = self._read_instance_auth().get("host")
+        if not host:
+            return None
+        h = token_hash(token)
+        if h in (host.get("access_hashes") or []):
+            return self._public_host(host)
+        return None
+
+    def recover_host(self, code: str) -> tuple[dict[str, Any], str, str]:
+        path = self._instance_auth_path()
+        lock = FileLock(str(path) + ".lock", timeout=15)
+        with lock:
+            obj = self._read_json(path, self._instance_auth_default()) if path.exists() else self._instance_auth_default()
+            host = obj.get("host")
+            if not host:
+                raise ValidationError("This Cocklebur instance has not been claimed by a Host yet")
+            if token_hash((code or "").strip().upper()) != host.get("recovery_hash"):
+                raise PermissionError_("Invalid Host recovery code")
+            access = new_token()
+            recovery = new_recovery_code()
+            hashes = [x for x in (host.get("access_hashes") or []) if x]
+            hashes.append(token_hash(access))
+            host["access_hashes"] = hashes[-8:]
+            host["recovery_hash"] = token_hash(recovery)
+            host["recovery_updated_at"] = now_iso()
+            self._atomic_write_json(path, obj)
+            return self._public_host(host) or {}, access, recovery
+
+    def rotate_host_recovery(self) -> str:
+        path = self._instance_auth_path()
+        lock = FileLock(str(path) + ".lock", timeout=15)
+        with lock:
+            obj = self._read_json(path, self._instance_auth_default()) if path.exists() else self._instance_auth_default()
+            host = obj.get("host")
+            if not host:
+                raise ValidationError("This Cocklebur instance has not been claimed by a Host yet")
+            recovery = new_recovery_code()
+            host["recovery_hash"] = token_hash(recovery)
+            host["recovery_updated_at"] = now_iso()
+            self._atomic_write_json(path, obj)
+            return recovery
+
+    def reset_host_claim(self) -> Path | None:
+        """Break-glass reset of instance Host only; preserve projects and grants."""
+        path = self._instance_auth_path()
+        if not path.exists():
+            return None
+        lock = FileLock(str(path) + ".lock", timeout=15)
+        with lock:
+            obj = self._read_json(path, self._instance_auth_default())
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            backup = self.root / f".instance_auth.json.bak-{stamp}"
+            shutil.copy2(path, backup)
+            obj.setdefault("version", INSTANCE_AUTH_VERSION)
+            obj.setdefault("grants", [])
+            obj["host"] = None
+            self._atomic_write_json(path, obj)
+            return backup
+
+    def instance_grants(self) -> list[dict[str, Any]]:
+        return [dict(x) for x in self._read_instance_auth().get("grants", []) if isinstance(x, dict)]
+
+    def set_instance_permissions(self, project_id: str, person_id: str, *, can_create_projects: bool, can_import_projects: bool) -> dict[str, Any]:
+        person = self.person(project_id, person_id)
+        project = self.get_project(project_id)
+        path = self._instance_auth_path()
+        lock = FileLock(str(path) + ".lock", timeout=15)
+        with lock:
+            obj = self._read_json(path, self._instance_auth_default()) if path.exists() else self._instance_auth_default()
+            grants = [g for g in (obj.get("grants") or []) if not (g.get("project_id") == project_id and g.get("person_id") == person_id)]
+            if can_create_projects or can_import_projects:
+                grants.append({
+                    "project_id": project_id,
+                    "person_id": person_id,
+                    "can_create_projects": bool(can_create_projects),
+                    "can_import_projects": bool(can_import_projects),
+                    "updated_at": now_iso(),
+                })
+            obj["grants"] = grants
+            self._atomic_write_json(path, obj)
+        return {
+            "project_id": project_id,
+            "project_name": project.get("name", project_id),
+            "person_id": person_id,
+            "display_name": person.get("display_name", person_id),
+            "role": person.get("role", "member"),
+            "can_create_projects": bool(can_create_projects),
+            "can_import_projects": bool(can_import_projects),
+        }
+
+    def remove_instance_grant(self, project_id: str, person_id: str | None = None) -> None:
+        path = self._instance_auth_path()
+        if not path.exists():
+            return
+        lock = FileLock(str(path) + ".lock", timeout=15)
+        with lock:
+            obj = self._read_json(path, self._instance_auth_default())
+            before = obj.get("grants") or []
+            if person_id is None:
+                obj["grants"] = [g for g in before if g.get("project_id") != project_id]
+            else:
+                obj["grants"] = [g for g in before if not (g.get("project_id") == project_id and g.get("person_id") == person_id)]
+            self._atomic_write_json(path, obj)
+
+    def instance_people_catalog(self) -> list[dict[str, Any]]:
+        grants = {(g.get("project_id"), g.get("person_id")): g for g in self.instance_grants()}
+        out: list[dict[str, Any]] = []
+        roots = {p.resolve() for p in self.root.glob("p_*") if p.is_dir()}
+        for _pid, custom in self._registry().items():
+            roots.add(Path(custom).resolve())
+        for root in sorted(roots, key=lambda x: str(x)):
+            if not (root / "project.json").exists() or not (root / "people.json").exists():
+                continue
+            try:
+                project = self._read_json(root / "project.json")
+                if project.get("mode") != "server":
+                    continue
+                for person in self._read_json(root / "people.json", []):
+                    grant = grants.get((project.get("id"), person.get("id")), {})
+                    out.append({
+                        "project_id": project.get("id"),
+                        "project_name": project.get("name", project.get("id")),
+                        "person_id": person.get("id"),
+                        "display_name": person.get("display_name", person.get("id")),
+                        "role": person.get("role", "member"),
+                        "can_create_projects": bool(grant.get("can_create_projects")),
+                        "can_import_projects": bool(grant.get("can_import_projects")),
+                    })
+            except (ValidationError, NotFoundError):
+                continue
+        out.sort(key=lambda x: (str(x.get("display_name", "")).casefold(), str(x.get("project_name", "")).casefold()))
         return out
 
     # ---- People / auth ----
