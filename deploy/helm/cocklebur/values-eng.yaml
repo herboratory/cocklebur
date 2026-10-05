@@ -1,0 +1,42 @@
+# ENG 環境專用覆蓋設定
+global:
+  namespace: cocklebur-app
+
+image:
+  repository: registry.example.com/team/cocklebur-server
+  tag: latest
+  pullPolicy: IfNotPresent
+
+persistence:
+  storageClass: local-path
+  size: 10Gi
+
+ingress:
+  className: public
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web, websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+  hosts:
+    - host: cocklebur-eng.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: cocklebur-tls-eng
+      hosts:
+        - cocklebur-eng.example.com
+
+certificate:
+  issuerRef:
+    name: internal-ca-issuer
+    kind: ClusterIssuer
+  dnsNames:
+    - cocklebur-eng.example.com
+
+caIssuer:
+  enabled: true
+  name: internal-ca-issuer
+  secretName: internal-ca-secret
+
+config:
+  baseUrl: https://cocklebur-eng.example.com

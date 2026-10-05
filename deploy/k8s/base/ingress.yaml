@@ -1,0 +1,24 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: cocklebur-ingress
+  labels:
+    app.kubernetes.io/name: cocklebur-server
+spec:
+  ingressClassName: public
+  rules:
+    - host: cocklebur.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: cocklebur-service
+                port:
+                  number: 8000
+  tls:
+    - hosts:
+        - cocklebur.example.com
+      # 由各環境 overlay 覆蓋為 cocklebur-tls-<env> (例: cocklebur-tls-eng)
+      secretName: cocklebur-tls-ENV

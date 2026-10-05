@@ -1,0 +1,77 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: cocklebur-app
+
+resources:
+  - ../../base
+  - cluster-issuer-ca.yaml
+
+images:
+  - name: cocklebur-server
+    newName: registry.example.com/team/cocklebur-server
+    newTag: "latest"
+
+patches:
+  # 1. PVC 儲存設定
+  - target:
+      kind: PersistentVolumeClaim
+      name: cocklebur-data
+    patch: |-
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: cocklebur-data
+      spec:
+        storageClassName: local-path
+        resources:
+          requests:
+            storage: 10Gi
+
+  # 2. Ingress 設定 (traefik 控制器)
+  - target:
+      kind: Ingress
+      name: cocklebur-ingress
+    patch: |-
+      apiVersion: networking.k8s.io/v1
+      kind: Ingress
+      metadata:
+        name: cocklebur-ingress
+        annotations:
+          traefik.ingress.kubernetes.io/router.entrypoints: web, websecure
+          traefik.ingress.kubernetes.io/router.tls: "true"
+      spec:
+        ingressClassName: public
+        rules:
+          - host: cocklebur-eng.example.com
+            http:
+              paths:
+                - path: /
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: cocklebur-service
+                      port:
+                        number: 8000
+        tls:
+          - hosts:
+              - cocklebur-eng.example.com
+            secretName: cocklebur-tls-eng
+
+  # 3. cert-manager Certificate 設定
+  - target:
+      kind: Certificate
+      name: cocklebur-certificate
+    patch: |-
+      apiVersion: cert-manager.io/v1
+      kind: Certificate
+      metadata:
+        name: cocklebur-certificate
+      spec:
+        secretName: cocklebur-tls-eng
+        issuerRef:
+          name: internal-ca-issuer
+          kind: ClusterIssuer
+          group: cert-manager.io
+        dnsNames:
+          - cocklebur-eng.example.com

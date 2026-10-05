@@ -1,0 +1,30 @@
+services:
+  cocklebur-server:
+    image: ${IMAGE_NAME:-cocklebur-server:latest}
+    container_name: ${CONTAINER_NAME:-cocklebur-server}
+    restart: unless-stopped
+    ports:
+      - "${HOST_PORT:-8000}:8000"
+    environment:
+      - POPUP_APP_MODE=server
+      - POPUP_DATA_DIR=/data
+      - POPUP_BASE_URL=${POPUP_BASE_URL}
+      - COCKLEBUR_BOOTSTRAP_KEY=${COCKLEBUR_BOOTSTRAP_KEY}
+      - POPUP_SECRET_KEY=${POPUP_SECRET_KEY}
+      - POPUP_MAX_UPLOAD_MB=${POPUP_MAX_UPLOAD_MB:-50}
+      - POPUP_IMPORT_MAX_MB=${POPUP_IMPORT_MAX_MB:-2048}
+      - POPUP_PROJECT_QUOTA_MB=${POPUP_PROJECT_QUOTA_MB:-1024}
+    volumes:
+      - cocklebur_data:/data
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')\" || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  cocklebur_data:
+    name: ${VOLUME_NAME:-cocklebur_data}

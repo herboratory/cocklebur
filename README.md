@@ -1,130 +1,143 @@
-<p align="center">
-  <img src="assets/icon-source.png" alt="Cocklebur" width="120">
-</p>
+# Cocklebur Server — MVP
 
-# Cocklebur
+**Release:** `0.2.18.1`  
+**Project pack format:** `1.0`
 
-**A lightweight, portable project workspace. Land local. Pack it all up when you're done.**
+Cocklebur Server is a lightweight, self-hosted project workspace for bounded projects: keep one canonical live copy, collaborate in a browser, then export the whole project as a portable ZIP when the work is done.
 
-Cocklebur is a project-first workspace for bounded projects. Use it locally on macOS, or self-host a shared Server edition for a small team. When the project is finished, export the whole workspace as a portable project pack.
+This archive is the **Server distribution**. It intentionally does not include the Local/pywebview/Tauri desktop build tooling or old acceptance/hotfix documents.
 
-Current releases:
-- macOS Desktop: 0.2.15
-- Self-hosted Server: 0.2.16
+Cocklebur is intended for **personal, academic/research, teaching/educational, and non-commercial community use**. Commercial use is not granted; see `LICENSE`.
 
-[繁體中文](README_zh-Hant.md)
+## Core model
 
-## Download
+- One canonical server copy per active project.
+- File-backed storage: JSON / JSONL plus original uploaded files.
+- No CRDT, offline multi-master sync, or silent conflict merge.
+- Mutable entities use versions; stale writes return HTTP `409` instead of silently overwriting newer data.
+- Export creates a consistent snapshot and includes machine-readable data, human-readable text, and original files.
+- Server mode must run with **one application worker**.
 
-Prebuilt packages are published on the [GitHub Releases](https://github.com/herboratory/cocklebur/releases/latest) page.
-
-- **macOS Desktop** — download the `.dmg`
-- **Self-hosted Server** — download the Server `.zip`
-
-This repository is intentionally kept lightweight and serves as the public home for Cocklebur releases, documentation, issue reporting, and project information.
-
-## macOS Desktop
-
-Cocklebur Desktop is local-only and single-user. Project data stays on your Mac unless you explicitly export it.
-
-### First launch on macOS
-
-The current macOS build is **unsigned and not notarized**. macOS may block it on first launch.
-
-1. Try opening Cocklebur once.
-2. Open **System Settings → Privacy & Security**.
-3. Scroll down and click **Open Anyway** next to Cocklebur.
-4. Confirm **Open**.
-
-You normally only need to do this once for that copy of the app.
-
-If macOS reports the app as damaged, first verify that you downloaded it from the official Cocklebur GitHub Release and that its checksum matches. For a known-good copy, advanced users can remove the quarantine attribute:
-
-```bash
-xattr -cr /Applications/Cocklebur.app
-```
-
-## Self-hosted Server
-
-Cocklebur Server is for small teams that want one canonical shared project workspace.
-
-After downloading and extracting the Server package:
+## Quick start with Docker
 
 ```bash
 cp .env.example .env
 ```
 
-Set at least:
+For a local test, the defaults may remain:
 
 ```dotenv
-COCKLEBUR_HOST_KEY=replace-with-a-long-random-secret
 POPUP_APP_MODE=server
 POPUP_DATA_DIR=/data
-POPUP_BASE_URL=https://your-cocklebur.example.org
+POPUP_HOST_PORT=8000
+POPUP_BASE_URL=http://127.0.0.1:8000
 ```
 
-Then start it:
+For a stable deployment, set a long random one-time Host bootstrap key:
+
+```dotenv
+COCKLEBUR_BOOTSTRAP_KEY=replace-with-a-long-random-secret
+```
+
+Then start Cocklebur:
 
 ```bash
 docker compose up -d --build
+curl http://127.0.0.1:8000/health
 ```
 
-The supplied Docker configuration is intended to sit behind HTTPS through your own reverse proxy or tunnel. Do not expose the app's plain HTTP port directly to the public internet.
+Open `http://127.0.0.1:8000` for a local test. For Internet-facing use, keep the app bound to localhost and put HTTPS in front of it through a reverse proxy or tunnel. See `DEPLOY_SERVER.md`.
 
-## Screenshots
+## Server access model
+
+Cocklebur separates **instance-level Host access** from **project roles**:
+
+- **Host** — may create or import projects on this Cocklebur instance.
+- **Owner** — administers one project, invitations, roles, recovery, export/close/delete.
+- **Member** — normal project collaboration.
+- **Viewer** — read-only project access, except they may update their own display name.
+
+A project role does not automatically grant Host access.
+
+## Main features
 
 ### Projects
+- Create/import projects through Host access.
+- Active / closing / archived lifecycle.
+- Optional expected end date.
+- Export/import portable project packs.
 
-![Cocklebur Projects](assets/screenshot-projects.png)
+### Managed updates
+- Host-only Update Center can validate, back up, stage and apply compatible Server runtime updates.
+- The managed supervisor restarts Cocklebur, verifies `/health`, and automatically rolls back the code release if the target does not become healthy.
+- No Docker socket or Kubernetes credential is given to the web process.
+- A one-time normal deployment onto 0.2.18.1+ is required before in-app Apply is available.
 
-### Add New Project
+### Multi-device access
+- Owner / Member / Viewer identities can use the same `person_id` on multiple browsers/devices.
+- Use **Your profile → Manage devices → Add another device** for a short-lived one-time link + QR.
+- Instance Host has the same flow under **Host access → Manage Host devices**.
+- Invite creates a new person; Add device links an existing identity; Recovery remains the emergency path.
+- Individual non-current device sessions can be revoked without signing out the other devices.
 
-![Cocklebur Dashboard](assets/screenshot-newproject.png)
+### Cards
+- To-do and Event cards.
+- Pending / In Progress / Done / Archived status.
+- Markdown content, tags, assignees, checklist items, dates, and `.ics` download for dated Events.
+- **Visibility:** `Everyone` or `Only me`.
+- **Edit access:** shared or creator-only.
+- Assignees describe responsibility; they do not grant or restrict access.
+- Delete is creator-only for both To-do and Event cards.
+- Human-readable audit history records who changed content, status, schedule, and checklist items.
 
-## What Cocklebur includes
+### Announcements, Discussion, Files
+- Project announcements.
+- Channels, titled threads, replies, and channel visibility by role/person.
+- File upload/download with metadata, size/quota limits, SHA-256 digest, and optional Card links.
 
-- Projects with optional expected end dates
-- Dashboard
-- Announcements
-- To-do and Event Cards
-- Checklists, tags and assignees
-- Discussion channels and titled threads
-- Project files
-- Owner / Member / Viewer roles in Server mode
-- Invitation and recovery links
-- Activity history
-- Project export / import
-- Human-readable + machine-readable portable project packs
+### Recovery
+- Owners can generate one-time recovery links for existing collaborators.
+- Opening a recovery link first shows a confirmation page; the token is consumed only when recovery is confirmed.
+- Recovery restores the existing identity and **does not revoke other valid browser sessions**.
+- Owners also have a break-glass recovery code. Successful Owner recovery rotates that code.
 
-Cocklebur intentionally avoids offline multi-master sync and Google-Docs-style simultaneous co-editing. A project has one canonical active copy.
+## Data and privacy
 
-## Portable by design
+Self-hosted Cocklebur does not require a central project-data service operated by the software author. Project data lives in the storage controlled by the deployer. This is a technical architecture statement, not a waiver of privacy, security, or legal responsibilities.
 
-A project can be exported as a complete pack containing structured project data, human-readable material, checksums, and original files. The pack can later be imported into Cocklebur again.
+For Internet-facing use:
 
-## Privacy
+- use HTTPS;
+- keep one app worker;
+- do not expose the raw Docker port publicly;
+- back up the persistent data volume;
+- protect the Host bootstrap key, Host recovery code, invite links, recovery links, and Owner recovery codes.
 
-Cocklebur is local/self-hosted software. Herboratory does not operate a central Cocklebur project-data service.
+See `SECURITY.md`.
 
-Self-hosting still means the administrator of the machine or server can access the underlying files. Application-level visibility controls are not filesystem encryption.
+## Documentation
 
-## Support
+- `DEPLOY_SERVER.md` — deployment, clean reset, tunnels, and Host access
+- `USER_GUIDE.md` / `USER_GUIDE_zh-Hant.md` — day-to-day use
+- `BACKUP_RESTORE.md` — backup and restore
+- `UPDATE.md` — safe updates
+- `EXPORT_FORMAT.md` — portable project-pack format
+- `SECURITY.md` — security model
+- `RELEASE.md` — release metadata and limitations
+- `CHANGELOG.md` — project history
+- `LICENSE` — license terms
 
-Cocklebur is a **Herboratory** project.
+## Release validation
 
-If Cocklebur is useful to you, you can support the continued development of Herboratory projects on Buy Me a Coffee:
+A lightweight source-package guard is included:
 
-<a href="https://www.buymeacoffee.com/herboratory">
-  <img
-    src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png"
-    alt="Buy Me a Coffee"
-    height="60"
-    width="217"
-  >
-</a>
+```bash
+python scripts/package_guard.py
+```
 
-## License
+It checks required server-release files, rejects runtime secrets/project data/caches, and validates Python/JavaScript syntax when the relevant tools are available.
 
-Cocklebur is made available under the **PolyForm Noncommercial License 1.0.0**. Commercial use is not granted.
 
-See [LICENSE](LICENSE).
+## Server 0.2.18.1
+
+Adds multi-device access and a managed Update Center that can apply compatible runtime updates with restart, health verification and automatic code rollback. Host access uses a single explicit Bootstrap Key for first claim, browser Host sessions for normal use, and rotating Host recovery codes for recovery. Project Pack format remains 1.0.

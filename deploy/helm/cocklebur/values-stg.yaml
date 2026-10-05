@@ -1,0 +1,41 @@
+# STG 環境專用覆蓋設定
+global:
+  namespace: cocklebur-app
+
+image:
+  repository: registry.example.com/prod/cocklebur-server
+  tag: latest
+  pullPolicy: IfNotPresent
+
+persistence:
+  storageClass: nfs-client
+  size: 10Gi
+
+ingress:
+  className: public
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    nginx.ingress.kubernetes.io/client-max-body-size: "50m"
+  hosts:
+    - host: cocklebur-stg.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: cocklebur-tls-stg
+      hosts:
+        - cocklebur-stg.example.com
+
+certificate:
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+  dnsNames:
+    - cocklebur-stg.example.com
+
+caIssuer:
+  enabled: false
+
+config:
+  baseUrl: https://cocklebur-stg.example.com

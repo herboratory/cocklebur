@@ -1,130 +1,133 @@
-<p align="center">
-  <img src="assets/icon-source.png" alt="Cocklebur" width="120">
-</p>
+# Cocklebur Server — MVP
 
-# Cocklebur
+**版本：** `0.2.18.1`  
+**Project pack format：** `1.0`
 
-**輕量、可攜的專案工作空間。Local 落地，結束時整包帶走。**
+Cocklebur Server 是一個輕量、可自行部署的 project workspace。核心原則是：**一個 project 同時間只有一份 canonical live copy**；大家在同一個 server project 上工作，結束時可以把整個 project 匯出成可攜 ZIP 帶走。
 
-Cocklebur 是以「專案」為核心的輕量工作空間。你可以在 macOS 本機單人使用，也可以自行部署 Server 版讓小型團隊共同使用同一份 canonical project。專案結束後，可以把整個工作空間匯出成可攜式 project pack。
+這個壓縮包是 **Server 發布版**，已移除 Local / pywebview / Tauri desktop build 工具，以及 H2～H16 等舊驗收與 hotfix 文件。
 
-**目前版本：
-- macOS Desktop: 0.2.15
-- Self-hosted Server: 0.2.16
+Cocklebur 用於 **個人、學術/研究、教學/教育、非商業社群**情境；不授予商業使用權，詳見 `LICENSE`。
 
-[English](README.md)
+## 核心設計
 
-## 下載
+- 一個 project 只有一份 active canonical server copy。
+- 資料使用 JSON / JSONL + 原始 files，並非綁死在 proprietary database。
+- 不做 CRDT、offline multi-master sync 或 silent auto-merge。
+- 可變更資料有 version；拿舊版本 Save 時回 HTTP `409`，不會偷偷覆蓋較新的內容。
+- Export 會做一致性 snapshot，包含 machine-readable data、human-readable text 與原始 files。
+- Server 必須維持 **單一 application worker**。
 
-預先建置好的版本都放在 [GitHub Releases](https://github.com/herboratory/cocklebur/releases/latest)：
-
-- **macOS Desktop** — 下載 `.dmg`
-- **Self-hosted Server** — 下載 Server `.zip`
-
-這個 repository 本身刻意保持精簡，主要作為 Cocklebur 的公開下載入口、說明、issue 回報與專案資訊頁。
-
-## macOS Desktop
-
-Cocklebur Desktop 是 local-only、單人使用版本。除非你主動匯出，project data 都留在你的 Mac 上。
-
-### macOS 第一次開啟
-
-目前 macOS 版本**尚未使用 Apple Developer ID 簽署，也未 notarize**，所以第一次開啟時 macOS 可能會阻擋。
-
-1. 先嘗試開啟 Cocklebur 一次。
-2. 打開 **System Settings → Privacy & Security**。
-3. 往下找到 Cocklebur，按 **Open Anyway**。
-4. 再確認 **Open**。
-
-通常每一份 app 只需要做一次。
-
-如果 macOS 顯示 app damaged，請先確認是從 Cocklebur 官方 GitHub Release 下載，並核對 checksum。若確認檔案正常，進階使用者可移除 quarantine attribute：
-
-```bash
-xattr -cr /Applications/Cocklebur.app
-```
-
-## Self-hosted Server
-
-Server 版適合需要多人共同使用同一份 project workspace 的小型團隊。
-
-下載並解壓 Server package 後：
+## Docker 快速啟動
 
 ```bash
 cp .env.example .env
 ```
 
-至少設定：
+本機測試可先維持：
 
 ```dotenv
-COCKLEBUR_HOST_KEY=請換成足夠長的隨機密鑰
 POPUP_APP_MODE=server
 POPUP_DATA_DIR=/data
-POPUP_BASE_URL=https://你的-cocklebur-網址
+POPUP_HOST_PORT=8000
+POPUP_BASE_URL=http://127.0.0.1:8000
 ```
 
-然後啟動：
+穩定部署建議設定一組長而隨機、僅用於首次 Claim Host 的 bootstrap key：
+
+```dotenv
+COCKLEBUR_BOOTSTRAP_KEY=換成你自己的長隨機secret
+```
+
+啟動：
 
 ```bash
 docker compose up -d --build
+curl http://127.0.0.1:8000/health
 ```
 
-Server 版預期放在你自己的 HTTPS reverse proxy 或 tunnel 後方。不要把 Cocklebur 的 plain HTTP port 直接暴露到公網。
+本機測試開 `http://127.0.0.1:8000`。若要公開到 Internet，保留 Cocklebur 只 bind localhost，前面再放 HTTPS reverse proxy / tunnel。詳細看 `DEPLOY_SERVER.md`。
 
-## Screenshots
+## 權限模型
 
-### 專案頁面
+Cocklebur 把 **Server Host** 和 **project role** 分開：
 
-![Cocklebur Projects](assets/screenshot-projects.png)
+- **Host**：可在這個 Cocklebur instance 建立 / Import project。
+- **Owner**：管理某個 project、邀請、角色、recovery、export / close / delete。
+- **Member**：正常協作。
+- **Viewer**：project 內容唯讀；仍可修改自己的 display name。
 
-### 新增專案
-
-![Cocklebur Dashboard](assets/screenshot-newproject.png)
+Project Owner / Member / Viewer 並不會因此取得 Host 權限。
 
 ## 主要功能
 
-- Projects 與 optional expected end date
-- Dashboard
-- Announcements
-- To-do / Event Cards
-- Checklist、tag、assignee
-- Discussion channels 與有標題的 threads
-- Project files
-- Server mode 的 Owner / Member / Viewer
-- Invitation / recovery links
-- Activity history
-- Project export / import
-- Human-readable + machine-readable portable project packs
+### Managed updates
+- Host 可在 Update Center 驗證、備份、stage 並套用相容的 Server runtime 更新。
+- managed supervisor 會重啟 Cocklebur、檢查 `/health`，若新版無法正常啟動會自動回退程式版本。
+- Web process 不取得 Docker socket 或 Kubernetes 管理權限。
+- 從 0.2.17.2 或更舊版本升上來時，需最後一次正常 deploy 0.2.18.1+；之後相容更新才可由頁面 Apply。
 
-Cocklebur 刻意不做 offline multi-master sync，也不做 Google Docs 式即時多人共同編輯。同一個 project 永遠以一份 canonical active copy 為準。
+### Multi-device access
+- Owner / Member / Viewer 可在多個 browser/device 使用同一個 `person_id`。
+- **Your profile → Manage devices → Add another device** 會產生短時效 one-time link + QR。
+- Instance Host 在 **Host access → Manage Host devices** 有同樣流程。
+- Invite = 新的人；Add device = 同一身分新增裝置；Recovery = access 遺失時救援。
+- 可單獨 revoke 非 current device，不會把其他裝置一起登出。
 
-## Portable by design
+### Cards
+- To-do / Event。
+- Pending / In Progress / Done / Archived。
+- Markdown、tags、assignees、checklist、日期與 Event `.ics`。
+- **Visibility：** `Everyone` / `Only me`。
+- **Edit access：** Shared / creator-only。
+- Assignee 只代表責任歸屬，不控制權限。
+- To-do / Event 都只有原 creator 能 Delete。
+- Card 內會顯示人類可讀的 activity，例如 `Bob completed “Book venue”`，不會把 `card.created` 這種 backend key 直接丟給使用者。
 
-Project 可以完整匯出，內容包括 structured project data、human-readable material、checksums 與原始 files；之後可以重新匯入 Cocklebur。
+### Announcements / Discussion / Files
+- Project announcements。
+- Channels、帶標題的 threads、replies，以及依角色/人員控制 channel visibility。
+- File upload/download、metadata、size/quota、SHA-256 與 Card links。
 
-## Privacy
+### Recovery
+- Owner 可為既有 collaborator 產生一次性 recovery link。
+- GET 打開 recovery link 只會進確認頁；真正確認 recovery 時才 consume token，避免 preview/prefetch 把 link 吃掉。
+- Recovery 會恢復原 identity，**不會踢掉其他仍然有效的 browser sessions**。
+- Owner 另有 break-glass recovery code；成功使用後會 rotate 成新 code。
 
-Cocklebur 是 local / self-hosted 軟體。Herboratory 不提供中央 Cocklebur project-data service。
+## 資料與隱私
 
-但 self-hosting 仍代表機器或 server 管理者能直接存取底層檔案；app 裡的 visibility control 並不是 filesystem encryption。
+Self-hosted Cocklebur 不要求把 project data 放到軟體作者營運的中央資料服務；資料由部署者自己控制 storage。這只是技術架構描述，不代表部署者沒有隱私、安全或法律責任。
 
-## 支持開發
+Internet-facing deployment 請：
 
-Cocklebur 是 **Herboratory** 的專案。
+- 使用 HTTPS；
+- 維持單一 app worker；
+- 不要把 raw Docker port 直接公開到 Internet；
+- 備份 persistent volume；
+- 保護 Host bootstrap key、Host recovery code、invite link、recovery link 與 Owner recovery code。
 
-如果 Cocklebur 對你有幫助，可以透過 Buy Me a Coffee 支持 Herboratory 持續開發與維護各個專案：
+## 文件
 
-<a href="https://www.buymeacoffee.com/herboratory">
-  <img
-    src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png"
-    alt="Buy Me a Coffee"
-    height="60"
-    width="217"
-  >
-</a>
+- `DEPLOY_SERVER.md` — Server 部署、乾淨重建、tunnel、Host access
+- `USER_GUIDE.md` / `USER_GUIDE_zh-Hant.md` — 使用方法
+- `BACKUP_RESTORE.md` — 備份 / 還原
+- `UPDATE.md` — 安全更新
+- `EXPORT_FORMAT.md` — project pack 格式
+- `SECURITY.md` — security model
+- `RELEASE.md` — release metadata / limitations
+- `CHANGELOG.md` — 歷史變更
+- `LICENSE` — license
 
-## License
+## Package sanity check
 
-Cocklebur 採用 **PolyForm Noncommercial License 1.0.0**。目前不授予商業使用權。
+```bash
+python scripts/package_guard.py
+```
 
-詳見 [LICENSE](LICENSE)。
+它會檢查 Server 發布必需檔案、拒絕 runtime secrets / project data / cache，並在工具可用時做 Python / JavaScript syntax validation。
+
+
+## Server 0.2.18.1
+
+加入多裝置存取與可真正 Apply 的 Managed Update Center；相容 runtime 更新可由 Host 在頁面完成驗證、備份、套用、重啟、health check 與失敗自動回退。Host credential 仍維持 Bootstrap Key → browser session → rotating recovery code。Project Pack format 維持 1.0。

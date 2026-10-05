@@ -1,0 +1,77 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: cocklebur-app
+
+resources:
+  - ../../base
+
+images:
+  - name: cocklebur-server
+    newName: registry.example.com/prod/cocklebur-server
+    newTag: "latest"
+
+patches:
+  # 1. PVC 儲存設定
+  - target:
+      kind: PersistentVolumeClaim
+      name: cocklebur-data
+    patch: |-
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: cocklebur-data
+      spec:
+        storageClassName: nfs-client
+        resources:
+          requests:
+            storage: 10Gi
+
+  # 2. Ingress 設定 (nginx 控制器)
+  - target:
+      kind: Ingress
+      name: cocklebur-ingress
+    patch: |-
+      apiVersion: networking.k8s.io/v1
+      kind: Ingress
+      metadata:
+        name: cocklebur-ingress
+        annotations:
+          nginx.ingress.kubernetes.io/ssl-redirect: "true"
+          nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+          nginx.ingress.kubernetes.io/client-max-body-size: "50m"
+      spec:
+        ingressClassName: public
+        rules:
+          - host: cocklebur-stg.example.com
+            http:
+              paths:
+                - path: /
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: cocklebur-service
+                      port:
+                        number: 8000
+        tls:
+          - hosts:
+              - cocklebur-stg.example.com
+            secretName: cocklebur-tls-stg
+
+  # 3. cert-manager Certificate 設定
+  - target:
+      kind: Certificate
+      name: cocklebur-certificate
+    patch: |-
+      apiVersion: cert-manager.io/v1
+      kind: Certificate
+      metadata:
+        name: cocklebur-certificate
+      spec:
+        secretName: cocklebur-tls-stg
+        issuerRef:
+          name: letsencrypt-prod
+          kind: ClusterIssuer
+          group: cert-manager.io
+        dnsNames:
+          - cocklebur-stg.example.com

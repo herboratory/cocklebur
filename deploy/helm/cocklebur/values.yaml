@@ -1,0 +1,84 @@
+# 預設 Values (基礎設定)
+replicaCount: 1
+
+image:
+  repository: cocklebur-server
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: "cocklebur-server"
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+
+service:
+  type: ClusterIP
+  port: 8000
+
+ingress:
+  enabled: true
+  className: "public"
+  annotations: {}
+  hosts:
+    - host: cocklebur.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: cocklebur-tls-prod
+      hosts:
+        - cocklebur.example.com
+
+certificate:
+  enabled: true
+  secretName: cocklebur-tls-prod
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+    group: cert-manager.io
+  dnsNames:
+    - cocklebur.example.com
+
+# 若環境需要自簽 CA ClusterIssuer (如 eng/uat)
+clusterIssuerCA:
+  create: false
+  name: internal-ca-issuer
+  caSecretName: internal-ca-secret
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 1000m
+    memory: 1024Mi
+
+persistence:
+  enabled: true
+  storageClassName: ""
+  accessMode: ReadWriteOnce
+  size: 10Gi
+  mountPath: /data
+
+config:
+  appMode: server
+  dataDir: /data
+  baseUrl: https://cocklebur.example.com
+  maxUploadMb: "50"
+  importMaxMb: "2048"
+  projectQuotaMb: "1024"
+
+# 機密金鑰 (可直接填寫或由 CI/CD --set secrets.bootstrapKey=... 注入)
+secrets:
+  create: true
+  bootstrapKey: ""
+  secretKey: ""

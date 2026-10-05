@@ -1,0 +1,18 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: cocklebur-certificate
+  labels:
+    app.kubernetes.io/name: cocklebur-server
+spec:
+  # 由各環境 overlay 覆蓋為 cocklebur-tls-<env> (例: cocklebur-tls-eng)
+  secretName: cocklebur-tls-ENV
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+    group: cert-manager.io
+  dnsNames:
+    - cocklebur.example.com
+  usages:
+    - digital signature
+    - key encipherment

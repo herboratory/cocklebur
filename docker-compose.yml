@@ -1,0 +1,15 @@
+services:
+  popup-workspace:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${POPUP_HOST_PORT:-8000}:8000"
+    env_file:
+      - .env
+    volumes:
+      - popup_workspace_data:/data
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  popup_workspace_data:
