@@ -9,7 +9,7 @@ import tempfile
 import uuid
 import zipfile
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -23,6 +23,7 @@ from .security import new_recovery_code, new_token, safe_filename, safe_id, toke
 FORMAT_NAME = "popup-workspace-pack"
 FORMAT_VERSION = "1.0"
 INSTANCE_AUTH_VERSION = 1
+DEVICE_LINK_TTL_MINUTES = 10
 
 
 class NotFoundError(Exception):
@@ -48,6 +49,92 @@ class CapsuleStore:
         self.settings = settings
         self.root = settings.data_dir
         self.root.mkdir(parents=True, exist_ok=True)
+
+
+    @staticmethod
+    def _clean_device_label(label: str | None) -> str:
+        value = " ".join((label or "").strip().split())
+        return (value[:80] or "Browser")
+
+    @staticmethod
+    def _legacy_session_id(token_hash_value: str) -> str:
+        return f"legacy_{token_hash_value[:20]}"
+
+    def _record_device_session(self, target: dict[str, Any], access: str, label: str | None = None) -> dict[str, Any]:
+        """Append a new concurrent browser credential and its user-visible device metadata."""
+        h = token_hash(access)
+        hashes = [x for x in (target.get("access_hashes") or []) if x and x != h]
+        hashes.append(h)
+        target["access_hashes"] = hashes
+        sessions = [x for x in (target.get("device_sessions") or []) if isinstance(x, dict) and x.get("token_hash") != h]
+        ts = now_iso()
+        session = {
+            "id": self._new_id("s"),
+            "token_hash": h,
+            "label": self._clean_device_label(label),
+            "created_at": ts,
+            "last_seen_at": ts,
+        }
+        sessions.append(session)
+        target["device_sessions"] = sessions
+        return session
+
+    def _public_device_sessions(self, target: dict[str, Any], current_token: str | None = None) -> list[dict[str, Any]]:
+        """Return device/session metadata without exposing credential hashes.
+
+        0.2.17.x stored only access_hashes. Those credentials remain valid and are
+        surfaced as legacy sessions until the user links/re-authenticates a device.
+        """
+        current_hash = token_hash(current_token) if current_token else None
+        active_hashes = [x for x in (target.get("access_hashes") or []) if x]
+        by_hash = {
+            str(x.get("token_hash")): x
+            for x in (target.get("device_sessions") or [])
+            if isinstance(x, dict) and x.get("token_hash")
+        }
+        out: list[dict[str, Any]] = []
+        for h in active_hashes:
+            meta = by_hash.get(h)
+            if meta:
+                out.append({
+                    "id": meta.get("id") or self._legacy_session_id(h),
+                    "label": self._clean_device_label(meta.get("label")),
+                    "created_at": meta.get("created_at"),
+                    "last_seen_at": meta.get("last_seen_at"),
+                    "current": h == current_hash,
+                    "legacy": False,
+                })
+            else:
+                out.append({
+                    "id": self._legacy_session_id(h),
+                    "label": "Existing browser session",
+                    "created_at": target.get("joined_at") or target.get("claimed_at"),
+                    "last_seen_at": None,
+                    "current": h == current_hash,
+                    "legacy": True,
+                })
+        out.sort(key=lambda x: (not bool(x.get("current")), str(x.get("created_at") or "")))
+        return out
+
+    @staticmethod
+    def _device_link_expiry() -> str:
+        return (datetime.now(timezone.utc) + timedelta(minutes=DEVICE_LINK_TTL_MINUTES)).isoformat().replace("+00:00", "Z")
+
+    @staticmethod
+    def _device_link_is_live(target: dict[str, Any]) -> bool:
+        raw = target.get("device_link_expires_at")
+        if not raw:
+            return False
+        try:
+            expires = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            return expires > datetime.now(timezone.utc)
+        except ValueError:
+            return False
+
+    @staticmethod
+    def _clear_device_link(target: dict[str, Any]) -> None:
+        for key in ["device_link_hash", "device_link_created_at", "device_link_expires_at"]:
+            target.pop(key, None)
 
     def _registry_path(self) -> Path:
         return self.root / ".project_registry.json"
@@ -174,7 +261,7 @@ class CapsuleStore:
     def _new_id(self, prefix: str) -> str:
         return f"{prefix}_{uuid.uuid4().hex[:16]}"
 
-    def create_project(self, payload: dict[str, Any]) -> tuple[dict[str, Any], str | None, str]:
+    def create_project(self, payload: dict[str, Any], device_label: str | None = None) -> tuple[dict[str, Any], str | None, str]:
         project_id = self._new_id("p")
         storage_path = payload.get("storage_path")
         if storage_path and payload.get("mode", "local") == "local" and self.settings.app_mode == "local":
@@ -228,7 +315,7 @@ class CapsuleStore:
         }
         if mode == "server":
             owner_token = new_token()
-            owner["access_hashes"].append(token_hash(owner_token))
+            self._record_device_session(owner, owner_token, device_label)
         settings = {
             "version": 1,
             "expiry": payload.get("expiry"),
@@ -270,6 +357,19 @@ class CapsuleStore:
                     continue
         projects.sort(key=lambda x: x.get("content_updated_at", ""), reverse=True)
         return projects
+
+    def list_project_ids(self) -> list[str]:
+        ids: set[str] = set()
+        for root in self.root.glob("p_*"):
+            if root.is_dir() and (root / "project.json").exists():
+                ids.add(root.name)
+        for pid, custom in self._registry().items():
+            try:
+                if (Path(custom).resolve() / "project.json").exists():
+                    ids.add(pid)
+            except Exception:
+                continue
+        return sorted(ids)
 
     def get_project(self, project_id: str) -> dict[str, Any]:
         return self._read_json(self._path(project_id, "project.json"))
@@ -379,7 +479,7 @@ class CapsuleStore:
             return None
         return {k: host.get(k) for k in ["display_name", "claimed_at", "recovery_updated_at"]}
 
-    def claim_host(self, display_name: str) -> tuple[dict[str, Any], str, str]:
+    def claim_host(self, display_name: str, device_label: str | None = None) -> tuple[dict[str, Any], str, str]:
         path = self._instance_auth_path()
         lock = FileLock(str(path) + ".lock", timeout=15)
         with lock:
@@ -392,10 +492,12 @@ class CapsuleStore:
             host = {
                 "display_name": (display_name or "Host").strip()[:100] or "Host",
                 "claimed_at": ts,
-                "access_hashes": [token_hash(access)],
+                "access_hashes": [],
+                "device_sessions": [],
                 "recovery_hash": token_hash(recovery),
                 "recovery_updated_at": ts,
             }
+            self._record_device_session(host, access, device_label)
             obj = {"version": INSTANCE_AUTH_VERSION, "host": host, "grants": obj.get("grants", []) or []}
             self._atomic_write_json(path, obj)
             return self._public_host(host) or {}, access, recovery
@@ -411,7 +513,7 @@ class CapsuleStore:
             return self._public_host(host)
         return None
 
-    def recover_host(self, code: str) -> tuple[dict[str, Any], str, str]:
+    def recover_host(self, code: str, device_label: str | None = None) -> tuple[dict[str, Any], str, str]:
         path = self._instance_auth_path()
         lock = FileLock(str(path) + ".lock", timeout=15)
         with lock:
@@ -423,9 +525,7 @@ class CapsuleStore:
                 raise PermissionError_("Invalid Host recovery code")
             access = new_token()
             recovery = new_recovery_code()
-            hashes = [x for x in (host.get("access_hashes") or []) if x]
-            hashes.append(token_hash(access))
-            host["access_hashes"] = hashes[-8:]
+            self._record_device_session(host, access, device_label)
             host["recovery_hash"] = token_hash(recovery)
             host["recovery_updated_at"] = now_iso()
             self._atomic_write_json(path, obj)
@@ -445,11 +545,97 @@ class CapsuleStore:
             self._atomic_write_json(path, obj)
             return recovery
 
+    def host_devices(self, current_token: str | None) -> list[dict[str, Any]]:
+        host = self._read_instance_auth().get("host")
+        if not host:
+            raise ValidationError("This Cocklebur instance has not been claimed by a Host yet")
+        return self._public_device_sessions(host, current_token)
+
+    def create_host_device_link(self) -> tuple[str, str]:
+        token = new_token()
+        path = self._instance_auth_path()
+        lock = FileLock(str(path) + ".lock", timeout=15)
+        with lock:
+            obj = self._read_json(path, self._instance_auth_default()) if path.exists() else self._instance_auth_default()
+            host = obj.get("host")
+            if not host:
+                raise ValidationError("This Cocklebur instance has not been claimed by a Host yet")
+            host["device_link_hash"] = token_hash(token)
+            host["device_link_created_at"] = now_iso()
+            host["device_link_expires_at"] = self._device_link_expiry()
+            self._atomic_write_json(path, obj)
+            return token, host["device_link_expires_at"]
+
+    def verify_host_device_link(self, token: str) -> bool:
+        host = self._read_instance_auth().get("host")
+        if not host or not self._device_link_is_live(host):
+            return False
+        return token_hash(token or "") == host.get("device_link_hash")
+
+    def claim_host_device_link(self, token: str, device_label: str | None = None) -> tuple[dict[str, Any], str, dict[str, Any]]:
+        path = self._instance_auth_path()
+        lock = FileLock(str(path) + ".lock", timeout=15)
+        with lock:
+            obj = self._read_json(path, self._instance_auth_default()) if path.exists() else self._instance_auth_default()
+            host = obj.get("host")
+            if not host or not self._device_link_is_live(host) or token_hash(token or "") != host.get("device_link_hash"):
+                raise PermissionError_("Invalid or expired Host device link")
+            access = new_token()
+            session = self._record_device_session(host, access, device_label)
+            self._clear_device_link(host)
+            self._atomic_write_json(path, obj)
+            return self._public_host(host) or {}, access, {k: session.get(k) for k in ["id", "label", "created_at", "last_seen_at"]}
+
+    def revoke_host_device(self, session_id: str, current_token: str | None) -> None:
+        safe_id(session_id, "session id") if not session_id.startswith("legacy_") else None
+        path = self._instance_auth_path()
+        lock = FileLock(str(path) + ".lock", timeout=15)
+        with lock:
+            obj = self._read_json(path, self._instance_auth_default()) if path.exists() else self._instance_auth_default()
+            host = obj.get("host")
+            if not host:
+                raise ValidationError("This Cocklebur instance has not been claimed by a Host yet")
+            current_hash = token_hash(current_token) if current_token else None
+            sessions = [x for x in (host.get("device_sessions") or []) if isinstance(x, dict)]
+            target_hash = None
+            for item in sessions:
+                if item.get("id") == session_id:
+                    target_hash = item.get("token_hash")
+                    break
+            if target_hash is None and session_id.startswith("legacy_"):
+                prefix = session_id[len("legacy_"):]
+                matches = [x for x in (host.get("access_hashes") or []) if str(x).startswith(prefix)]
+                if len(matches) == 1:
+                    target_hash = matches[0]
+            if not target_hash or target_hash not in (host.get("access_hashes") or []):
+                raise NotFoundError("device session")
+            if target_hash == current_hash:
+                raise ValidationError("The current Host device cannot revoke itself")
+            host["access_hashes"] = [x for x in (host.get("access_hashes") or []) if x != target_hash]
+            host["device_sessions"] = [x for x in sessions if x.get("token_hash") != target_hash]
+            self._atomic_write_json(path, obj)
+
+    def reset_host_claim(self) -> Path | None:
+        """Break-glass reset of instance Host only; preserve projects and grants."""
+        path = self._instance_auth_path()
+        if not path.exists():
+            return None
+        lock = FileLock(str(path) + ".lock", timeout=15)
+        with lock:
+            obj = self._read_json(path, self._instance_auth_default())
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            backup = self.root / f".instance_auth.json.bak-{stamp}"
+            shutil.copy2(path, backup)
+            obj.setdefault("version", INSTANCE_AUTH_VERSION)
+            obj.setdefault("grants", [])
+            obj["host"] = None
+            self._atomic_write_json(path, obj)
+            return backup
+
     def instance_grants(self) -> list[dict[str, Any]]:
         return [dict(x) for x in self._read_instance_auth().get("grants", []) if isinstance(x, dict)]
 
     def set_instance_permissions(self, project_id: str, person_id: str, *, can_create_projects: bool, can_import_projects: bool) -> dict[str, Any]:
-        # Validate that the identity still exists before granting instance capabilities.
         person = self.person(project_id, person_id)
         project = self.get_project(project_id)
         path = self._instance_auth_path()
@@ -559,7 +745,7 @@ class CapsuleStore:
             self._activity_unlocked(project_id, actor_id, "invite.regenerated", "Invite regenerated")
         return token
 
-    def join(self, project_id: str, display_name: str, invite_token: str, pin: str | None) -> tuple[dict[str, Any], str]:
+    def join(self, project_id: str, display_name: str, invite_token: str, pin: str | None, device_label: str | None = None) -> tuple[dict[str, Any], str]:
         from .security import verify_pin, verify_token
         with self.project_lock(project_id):
             settings = self.get_settings(project_id)
@@ -573,9 +759,11 @@ class CapsuleStore:
                 "display_name": display_name,
                 "role": "member",
                 "joined_at": now_iso(),
-                "access_hashes": [token_hash(access)],
+                "access_hashes": [],
+                "device_sessions": [],
                 "last_seen": {},
             }
+            self._record_device_session(person, access, device_label)
             path = self._path(project_id, "people.json")
             people = self._read_json(path, [])
             people.append(person)
@@ -615,9 +803,8 @@ class CapsuleStore:
             self._atomic_write_json(path, people)
             self._touch_content_unlocked(project_id)
             self._activity_unlocked(project_id, actor_id, "member.removed", target["display_name"])
-        self.remove_instance_grant(project_id, person_id)
 
-    def issue_access(self, project_id: str, person_id: str, actor_id: str = "system") -> str:
+    def issue_access(self, project_id: str, person_id: str, actor_id: str = "system", device_label: str | None = None) -> str:
         """Issue a fresh browser access token directly.
 
         Used when the current request is already trusted (for example a successful
@@ -631,24 +818,19 @@ class CapsuleStore:
             target = next((p for p in people if p["id"] == person_id), None)
             if not target:
                 raise NotFoundError("person")
-            target["access_hashes"] = [token_hash(access)]
+            self._record_device_session(target, access, device_label)
             target["recovery_hash"] = None
             self._atomic_write_json(path, people)
             self._activity_unlocked(project_id, actor_id, "member.access_issued", target["display_name"])
         return access
 
     @staticmethod
-    def _append_access_hash(target: dict[str, Any], access: str, max_sessions: int = 8) -> None:
-        """Add a browser session without invalidating other valid devices.
-
-        Recovery restores access; it is not a stolen-device revocation flow. Keep a
-        small bounded set of project-scoped browser credentials so Desktop/phone
-        recovery cannot accidentally kick each other out.
-        """
+    def _append_access_hash(target: dict[str, Any], access: str) -> None:
+        """Add a concurrent browser credential without invalidating other devices."""
         h = token_hash(access)
         hashes = [x for x in (target.get("access_hashes") or []) if x and x != h]
         hashes.append(h)
-        target["access_hashes"] = hashes[-max_sessions:]
+        target["access_hashes"] = hashes
 
     def regenerate_access(self, project_id: str, person_id: str, actor_id: str) -> str:
         """Issue a one-time recovery token without signing out existing devices."""
@@ -664,7 +846,7 @@ class CapsuleStore:
             self._activity_unlocked(project_id, actor_id, "member.access_regenerated", target["display_name"])
         return token
 
-    def exchange_recovery(self, project_id: str, recovery_token: str) -> tuple[dict[str, Any], str]:
+    def exchange_recovery(self, project_id: str, recovery_token: str, device_label: str | None = None) -> tuple[dict[str, Any], str]:
         h = token_hash(recovery_token)
         access = new_token()
         with self.project_lock(project_id):
@@ -673,7 +855,7 @@ class CapsuleStore:
             target = next((p for p in people if p.get("recovery_hash") and h == p.get("recovery_hash")), None)
             if not target:
                 raise PermissionError_("Invalid or expired recovery link")
-            self._append_access_hash(target, access)
+            self._record_device_session(target, access, device_label)
             target["recovery_hash"] = None
             self._atomic_write_json(path, people)
             self._activity_unlocked(project_id, target["id"], "member.recovered", target["display_name"])
@@ -695,7 +877,7 @@ class CapsuleStore:
             self._activity_unlocked(project_id, actor_id, "owner.recovery_rotated", target.get("display_name", "Owner"), {"person_id": owner_id})
         return code
 
-    def recover_owner_code(self, project_id: str, code: str) -> tuple[dict[str, Any], str | None, str]:
+    def recover_owner_code(self, project_id: str, code: str, device_label: str | None = None) -> tuple[dict[str, Any], str | None, str]:
         h = token_hash((code or "").strip().upper())
         access: str | None = None
         next_code = new_recovery_code()
@@ -707,13 +889,85 @@ class CapsuleStore:
                 raise PermissionError_("Invalid owner recovery code")
             if self.get_project(project_id).get("mode") == "server":
                 access = new_token()
-                self._append_access_hash(target, access)
+                self._record_device_session(target, access, device_label)
             target["recovery_hash"] = None
             target["owner_recovery_hash"] = token_hash(next_code)
             target["owner_recovery_updated_at"] = now_iso()
             self._atomic_write_json(path, people)
             self._activity_unlocked(project_id, target["id"], "owner.recovered", target.get("display_name", "Owner"), {"person_id": target["id"]})
             return target, access, next_code
+
+    def person_devices(self, project_id: str, person_id: str, current_token: str | None) -> list[dict[str, Any]]:
+        person = self.person(project_id, person_id)
+        return self._public_device_sessions(person, current_token)
+
+    def create_person_device_link(self, project_id: str, person_id: str) -> tuple[str, str]:
+        token = new_token()
+        with self.project_lock(project_id):
+            path = self._path(project_id, "people.json")
+            people = self._read_json(path, [])
+            target = next((p for p in people if p.get("id") == person_id), None)
+            if not target:
+                raise NotFoundError("person")
+            target["device_link_hash"] = token_hash(token)
+            target["device_link_created_at"] = now_iso()
+            target["device_link_expires_at"] = self._device_link_expiry()
+            self._atomic_write_json(path, people)
+            self._activity_unlocked(project_id, person_id, "member.device_link_created", target.get("display_name", person_id), {"person_id": person_id})
+            return token, target["device_link_expires_at"]
+
+    def verify_person_device_link(self, project_id: str, token: str) -> dict[str, Any] | None:
+        h = token_hash(token or "")
+        for person in self.people(project_id):
+            if person.get("device_link_hash") == h and self._device_link_is_live(person):
+                return person
+        return None
+
+    def claim_person_device_link(self, project_id: str, token: str, device_label: str | None = None) -> tuple[dict[str, Any], str, dict[str, Any]]:
+        h = token_hash(token or "")
+        access = new_token()
+        with self.project_lock(project_id):
+            path = self._path(project_id, "people.json")
+            people = self._read_json(path, [])
+            target = next((p for p in people if p.get("device_link_hash") == h and self._device_link_is_live(p)), None)
+            if not target:
+                raise PermissionError_("Invalid or expired device link")
+            session = self._record_device_session(target, access, device_label)
+            self._clear_device_link(target)
+            self._atomic_write_json(path, people)
+            self._activity_unlocked(project_id, target["id"], "member.device_linked", target.get("display_name", target["id"]), {"person_id": target["id"], "session_id": session["id"]})
+            public = {k: session.get(k) for k in ["id", "label", "created_at", "last_seen_at"]}
+            return target, access, public
+
+    def revoke_person_device(self, project_id: str, person_id: str, session_id: str, current_token: str | None) -> None:
+        if not session_id.startswith("legacy_"):
+            safe_id(session_id, "session id")
+        with self.project_lock(project_id):
+            path = self._path(project_id, "people.json")
+            people = self._read_json(path, [])
+            target = next((p for p in people if p.get("id") == person_id), None)
+            if not target:
+                raise NotFoundError("person")
+            current_hash = token_hash(current_token) if current_token else None
+            sessions = [x for x in (target.get("device_sessions") or []) if isinstance(x, dict)]
+            target_hash = None
+            for item in sessions:
+                if item.get("id") == session_id:
+                    target_hash = item.get("token_hash")
+                    break
+            if target_hash is None and session_id.startswith("legacy_"):
+                prefix = session_id[len("legacy_"):]
+                matches = [x for x in (target.get("access_hashes") or []) if str(x).startswith(prefix)]
+                if len(matches) == 1:
+                    target_hash = matches[0]
+            if not target_hash or target_hash not in (target.get("access_hashes") or []):
+                raise NotFoundError("device session")
+            if target_hash == current_hash:
+                raise ValidationError("The current device cannot revoke itself")
+            target["access_hashes"] = [x for x in (target.get("access_hashes") or []) if x != target_hash]
+            target["device_sessions"] = [x for x in sessions if x.get("token_hash") != target_hash]
+            self._atomic_write_json(path, people)
+            self._activity_unlocked(project_id, person_id, "member.device_revoked", target.get("display_name", person_id), {"person_id": person_id, "session_id": session_id})
 
     def card_activity(self, project_id: str, card_id: str, limit: int = 100) -> list[dict[str, Any]]:
         safe_id(card_id, "card id")
@@ -747,13 +1001,46 @@ class CapsuleStore:
         safe_id(card_id, "card id")
         return self._read_json(self._path(project_id, f"cards/{card_id}.json"))
 
-    def create_card(self, project_id: str, payload: dict[str, Any], actor_id: str) -> dict[str, Any]:
+    @staticmethod
+    def _normalize_card_fields(card: dict[str, Any], previous_type: str | None = None) -> None:
+        card_type = card.get("type") or "task"
+        if card_type == "note":
+            if card.get("status") not in {"active", "archived"}:
+                old_status = card.get("status")
+                card["status"] = "archived" if old_status in {"done", "happened", "archived"} else "active"
+            card["start"] = None
+            card["end"] = None
+            card["all_day"] = False
+            card["assignees"] = []
+        elif previous_type == "note" and card.get("status") in {"active", "archived"}:
+            card["status"] = "archived" if card.get("status") == "archived" else ("scheduled" if card_type == "event" else "todo")
+
+    def _card_idempotency_path(self, project_id: str) -> Path:
+        return self._path(project_id, ".card-create-idempotency.json")
+
+    def create_card(self, project_id: str, payload: dict[str, Any], actor_id: str, idempotency_key: str | None = None) -> tuple[dict[str, Any], bool]:
         with self.project_lock(project_id):
+            idem_path = self._card_idempotency_path(project_id)
+            idem = self._read_json(idem_path, {}) if idem_path.exists() else {}
+            scoped_key = None
+            if idempotency_key:
+                key = str(idempotency_key).strip()
+                if len(key) > 160:
+                    raise ValidationError("Idempotency key is too long")
+                scoped_key = f"{actor_id}:{key}"
+                prior = idem.get(scoped_key)
+                if isinstance(prior, dict) and prior.get("card_id"):
+                    try:
+                        return self.get_card(project_id, prior["card_id"]), True
+                    except NotFoundError:
+                        idem.pop(scoped_key, None)
             cid = self._new_id("c")
             ts = now_iso()
+            card_type = payload.get("type", "task")
             card = {
-                "id": cid, "version": 1, "type": payload.get("type", "task"), "title": payload["title"],
-                "status": payload.get("status", "todo"), "start": payload.get("start"), "end": payload.get("end"),
+                "id": cid, "version": 1, "type": card_type, "title": payload["title"],
+                "status": payload.get("status", "active" if card_type == "note" else "todo"),
+                "start": payload.get("start"), "end": payload.get("end"),
                 "all_day": payload.get("all_day", False), "assignees": payload.get("assignees", []),
                 "description": payload.get("description", ""), "content": payload.get("content", ""),
                 "tags": payload.get("tags", []), "linked_files": payload.get("linked_files", []),
@@ -761,10 +1048,18 @@ class CapsuleStore:
                 "visibility": payload.get("visibility", "everyone"),
                 "created_by": actor_id, "updated_by": actor_id, "created_at": ts, "updated_at": ts,
             }
+            self._normalize_card_fields(card)
             self._atomic_write_json(self._path(project_id, f"cards/{cid}.json"), card)
+            if scoped_key:
+                idem[scoped_key] = {"card_id": cid, "created_at": ts}
+                if len(idem) > 300:
+                    oldest = sorted(idem.items(), key=lambda kv: str((kv[1] or {}).get("created_at", "")))[:-250]
+                    for old_key, _ in oldest:
+                        idem.pop(old_key, None)
+                self._atomic_write_json(idem_path, idem)
             self._touch_content_unlocked(project_id)
             self._activity_unlocked(project_id, actor_id, "card.created", card["title"], {"card_id": cid, "edit_access": card["edit_access"], "visibility": card["visibility"], "creator_id": actor_id})
-            return card
+            return card, False
 
     def update_card(self, project_id: str, card_id: str, patch: dict[str, Any], actor_id: str) -> dict[str, Any]:
         with self.project_lock(project_id):
@@ -777,6 +1072,7 @@ class CapsuleStore:
             for key, value in patch.items():
                 if value is not None:
                     card[key] = value
+            self._normalize_card_fields(card, before.get("type"))
             card.setdefault("edit_access", "public")
             card.setdefault("visibility", "everyone")
             card["version"] += 1
@@ -1154,8 +1450,24 @@ class CapsuleStore:
     def _copy_snapshot_unlocked(self, project_id: str, dest: Path) -> None:
         src = self.project_root(project_id)
         def ignore(_dir: str, names: list[str]) -> set[str]:
-            return {n for n in names if n.endswith(".lock") or n.endswith(".tmp") or n.endswith(".bak")}
+            return {n for n in names if n.endswith(".lock") or n.endswith(".tmp") or n.endswith(".bak") or n == ".card-create-idempotency.json"}
         shutil.copytree(src, dest, ignore=ignore)
+
+    def _sanitize_snapshot_credentials(self, snapshot: Path) -> None:
+        """Portable project packs must never carry live browser/device credentials."""
+        people_path = snapshot / "people.json"
+        if not people_path.exists():
+            return
+        people = self._read_json(people_path, [])
+        for person in people:
+            person["access_hashes"] = []
+            person["device_sessions"] = []
+            for key in [
+                "recovery_hash", "owner_recovery_hash", "owner_recovery_updated_at",
+                "device_link_hash", "device_link_created_at", "device_link_expires_at",
+            ]:
+                person.pop(key, None)
+        self._atomic_write_json(people_path, people)
 
     @staticmethod
     def _sha256_file(path: Path) -> str:
@@ -1172,6 +1484,7 @@ class CapsuleStore:
             snapshot = tdpath / "snapshot"
             with self.project_lock(project_id):
                 self._copy_snapshot_unlocked(project_id, snapshot)
+            self._sanitize_snapshot_credentials(snapshot)
             packroot = tdpath / "pack"
             data_dir = packroot / "data"; readable = packroot / "readable"; files_out = packroot / "files"
             data_dir.mkdir(parents=True); readable.mkdir(parents=True); files_out.mkdir(parents=True)
@@ -1220,9 +1533,17 @@ class CapsuleStore:
         overview += [f"- {p['display_name']} ({p['role']})" for p in people]
         (readable / "overview.txt").write_text("\n".join(overview) + "\n", "utf-8")
         card_lines = []
+        note_lines = []
         for c in cards:
-            card_lines += [f"[{c.get('status','')}] {c['title']} ({c.get('type','task')})", f"Updated: {c.get('updated_at','')}", f"Tags: {', '.join(c.get('tags', [])) or '—'}", c.get("content", ""), "", "---", ""]
+            lines = [f"[{c.get('status','')}] {c['title']} ({c.get('type','task')})", f"Updated: {c.get('updated_at','')}", f"Tags: {', '.join(c.get('tags', [])) or '—'}", c.get("content", ""), "", "---", ""]
+            if c.get("type") == "note":
+                note_lines += lines
+            else:
+                card_lines += lines
+        # Keep the legacy tasks-and-events filename for pack 1.0 readers; Notes
+        # are canonical Card JSON and also receive their own readable export.
         (readable / "tasks-and-events.txt").write_text("\n".join(card_lines), "utf-8")
+        (readable / "notes.txt").write_text("\n".join(note_lines), "utf-8")
         ann_lines = []
         for a in announcements:
             if a.get("deleted"): continue
@@ -1244,6 +1565,100 @@ class CapsuleStore:
                         lines += [f"{prefix} {m.get('title','')} [{m.get('ts','')}] actor={m.get('actor_id','')}", m.get("body", ""), ""]
                     lines += ["---", ""]
             (dr / f"{safe_filename(ch['name'])}.txt").write_text("\n".join(lines), "utf-8")
+
+    def export_workspace_bundle(self, project_ids: list[str]) -> tuple[Path, dict[str, Any]]:
+        ids = list(dict.fromkeys(project_ids))
+        if not ids:
+            raise ValidationError("No accessible projects to export")
+        with tempfile.TemporaryDirectory(prefix="cocklebur_workspace_") as td:
+            root = Path(td) / "workspace"
+            root.mkdir(parents=True)
+            projects_dir = root / "projects"
+            projects_dir.mkdir()
+            items: list[dict[str, Any]] = []
+            checksums: dict[str, str] = {}
+            for pid in ids:
+                if not self.exists(pid):
+                    raise NotFoundError("project")
+                pack, meta = self.export_project(pid)
+                target = projects_dir / f"{pid}.zip"
+                shutil.copy2(pack, target)
+                pack.unlink(missing_ok=True)
+                rel = target.relative_to(root).as_posix()
+                digest = self._sha256_file(target)
+                checksums[rel] = digest
+                items.append({"project_id": pid, "project_name": meta.get("project_name"), "file": rel, "sha256": digest})
+            manifest = {
+                "format": "cocklebur-workspace-bundle",
+                "format_version": "1.0",
+                "exported_at": now_iso(),
+                "source_instance_id": self.settings.instance_id,
+                "projects": items,
+            }
+            self._atomic_write_json(root / "bundle-manifest.json", manifest)
+            self._atomic_write_json(root / "checksums.json", checksums)
+            out_dir = self.root / ".exports"
+            out_dir.mkdir(exist_ok=True)
+            out = out_dir / f"Cocklebur_Workspace_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+            with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                for f in sorted(root.rglob("*")):
+                    if f.is_file():
+                        zf.write(f, f.relative_to(root).as_posix())
+            digest = self._sha256_file(out)
+        return out, {**manifest, "checksums": checksums, "zip_sha256": digest}
+
+    def _safe_extract_zip(self, zip_path: Path, dest: Path, max_bytes: int | None = None) -> None:
+        if not zipfile.is_zipfile(zip_path):
+            raise ValidationError("Not a valid ZIP")
+        limit = max_bytes if max_bytes is not None else self.settings.max_import_mb * 1024 * 1024
+        with zipfile.ZipFile(zip_path) as zf:
+            total_uncompressed = sum(info.file_size for info in zf.infolist())
+            if total_uncompressed > limit:
+                raise ValidationError("Archive expands beyond the configured limit")
+            for info in zf.infolist():
+                name = info.filename
+                if name.startswith(("/", "\\")) or ".." in Path(name).parts:
+                    raise ValidationError("Unsafe ZIP path")
+                target = (dest / name).resolve()
+                if dest.resolve() not in target.parents and target != dest.resolve():
+                    raise ValidationError("Unsafe ZIP path")
+            zf.extractall(dest)
+
+    def unpack_workspace_bundle(self, zip_path: Path, dest: Path) -> list[Path]:
+        self._safe_extract_zip(zip_path, dest)
+        manifest_path = dest / "bundle-manifest.json"
+        if not manifest_path.exists():
+            return [zip_path]
+        manifest = self._read_json(manifest_path)
+        if manifest.get("format") != "cocklebur-workspace-bundle" or manifest.get("format_version") != "1.0":
+            raise ValidationError("Unsupported Workspace Bundle")
+        checksum_path = dest / "checksums.json"
+        checksums = self._read_json(checksum_path, {}) if checksum_path.exists() else {}
+        packs: list[Path] = []
+        for item in manifest.get("projects", []):
+            rel = item.get("file", "")
+            path = (dest / rel).resolve()
+            if dest.resolve() not in path.parents or not path.is_file():
+                raise ValidationError("Invalid bundle project path")
+            expected = item.get("sha256") or checksums.get(rel)
+            if expected and self._sha256_file(path) != expected:
+                raise ValidationError(f"Workspace checksum mismatch: {rel}")
+            self.validate_pack(path)
+            packs.append(path)
+        if not packs:
+            raise ValidationError("Workspace Bundle contains no projects")
+        return packs
+
+    def preflight_pack(self, zip_path: Path) -> dict[str, Any]:
+        try:
+            manifest = self.validate_pack(zip_path)
+            pid = manifest.get("project_id")
+            status = "Duplicate ID" if pid and self.exists(pid) else "Ready"
+            return {"status": status, "project_id": pid, "project_name": manifest.get("project_name"), "format_version": manifest.get("format_version")}
+        except ValidationError as exc:
+            msg = str(exc)
+            status = "Incompatible version" if "version" in msg.lower() else "Invalid pack"
+            return {"status": status, "detail": msg}
 
     def validate_pack(self, zip_path: Path) -> dict[str, Any]:
         if not zipfile.is_zipfile(zip_path): raise ValidationError("Not a valid ZIP")
@@ -1321,8 +1736,11 @@ class CapsuleStore:
             for person in people:
                 person.setdefault("role", "member")
                 person.setdefault("access_hashes", [])
+                person.setdefault("device_sessions", [])
                 person.setdefault("last_seen", {})
                 person.pop("recovery_hash", None)
+                for key in ["device_link_hash", "device_link_created_at", "device_link_expires_at"]:
+                    person.pop(key, None)
             owners = [p for p in people if p.get("role") == "owner"]
             if not owners:
                 imported_owner = {
@@ -1339,6 +1757,7 @@ class CapsuleStore:
             if project.get("mode") == "server":
                 for person in people:
                     person["access_hashes"] = []
+                    person["device_sessions"] = []
             self._atomic_write_json(people_path, people)
 
             cards_dir = root / "cards"
@@ -1360,6 +1779,10 @@ class CapsuleStore:
                 if card.get("visibility") not in {"everyone", "private"}:
                     card["visibility"] = "everyone"
                     changed = True
+                before_normalized = copy.deepcopy(card)
+                self._normalize_card_fields(card)
+                if card != before_normalized:
+                    changed = True
                 if changed:
                     self._atomic_write_json(card_path, card)
 
@@ -1377,4 +1800,3 @@ class CapsuleStore:
         if not root.exists(): raise NotFoundError("project")
         shutil.rmtree(root)
         self._unregister_root(project_id)
-        self.remove_instance_grant(project_id)

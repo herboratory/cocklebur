@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{ title }}</title><link rel="stylesheet" href="/static/app.css?v={{ version }}"></head>
+<body>
+<main class="join-shell"><div class="join-card">
+  <div class="eyebrow">ADD DEVICE</div>
+  <h1>{{ title }}</h1>
+  {% if valid %}
+    <div class="banner"><strong>Same identity, another browser.</strong><br>{{ subtitle }}</div>
+    <form method="post" action="{{ action }}" class="form-stack">
+      <input type="hidden" name="token" value="{{ token }}">
+      <label>Device name <span class="muted">(you can change this)</span><input name="device_label" maxlength="80" value="{{ default_label }}" required autofocus></label>
+      <button class="btn" type="submit">Link this device</button>
+    </form>
+    <p class="microcopy">This one-time device link expires shortly and is consumed only after you confirm. Existing devices stay signed in.</p>
+  {% else %}
+    <div class="banner danger"><strong>Device link unavailable.</strong><br>{{ subtitle }}</div>
+  {% endif %}
+  <div style="margin-top:12px"><a class="btn secondary" href="{{ back_url }}">Back</a></div>
+</div></main>
+</body></html>

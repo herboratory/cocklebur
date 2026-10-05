@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import io
 import json
-import hmac
+import secrets
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -18,14 +19,16 @@ from . import __version__
 from .config import load_settings
 from .models import (
     CardCreate, CardPatch, ChannelCreate, JoinRequest, MessageCreate, MessageEdit, AnnouncementEdit,
-    PersonPatch, ProjectCreate, ProjectPatch, ReplyCreate, SeenUpdate, SettingsPatch, SelfPatch, HostLogin, HostRecover, InstancePermissionPatch, OwnerRecover,
+    PersonPatch, ProjectCreate, ProjectPatch, ReplyCreate, SeenUpdate, SettingsPatch, SelfPatch, HostClaim, HostRecover, InstancePermissionPatch, OwnerRecover, WorkspaceImportCommit,
 )
 from .rendering import render_markdown
 from .security import safe_id
 from .storage import CapsuleStore, ConflictError, NotFoundError, PermissionError_, ValidationError
+from .update_center import UpdateCenter
 
 settings = load_settings()
 store = CapsuleStore(settings)
+update_center = UpdateCenter(settings, store)
 app = FastAPI(title="Cocklebur", version=__version__)
 BASE = Path(__file__).resolve().parent
 app.mount("/static", StaticFiles(directory=BASE / "static"), name="static")
@@ -59,6 +62,34 @@ def set_host_cookie(response: Response, token: str) -> None:
         HOST_COOKIE, token, httponly=True, secure=settings.base_url.startswith("https://"),
         samesite="lax", max_age=60 * 60 * 24 * 180, path="/",
     )
+
+def device_label_from_request(request: Request) -> str:
+    ua = (request.headers.get("user-agent") or "").lower()
+    if "iphone" in ua:
+        platform = "iPhone"
+    elif "ipad" in ua:
+        platform = "iPad"
+    elif "android" in ua:
+        platform = "Android"
+    elif "windows" in ua:
+        platform = "Windows"
+    elif "macintosh" in ua or "mac os" in ua:
+        platform = "Mac"
+    elif "linux" in ua:
+        platform = "Linux"
+    else:
+        platform = "device"
+    if "edg/" in ua:
+        browser = "Edge"
+    elif "firefox/" in ua or "fxios/" in ua:
+        browser = "Firefox"
+    elif "crios/" in ua or ("chrome/" in ua and "edg/" not in ua):
+        browser = "Chrome"
+    elif "safari/" in ua:
+        browser = "Safari"
+    else:
+        browser = "Browser"
+    return f"{browser} on {platform}"
 
 def _delegated_instance_access(request: Request) -> dict[str, Any]:
     result = {"can_create_projects": False, "can_import_projects": False, "sources": []}
@@ -189,25 +220,60 @@ def get_instance_access(request: Request):
     return instance_access(request)
 
 
-@app.post("/api/host/login")
-def host_login(payload: HostLogin):
+@app.get("/api/update/status")
+def update_status(request: Request):
+    require_host(request)
+    return update_center.status()
+
+
+@app.post("/api/update/stage")
+async def update_stage(request: Request, file: UploadFile = File(...)):
+    require_host(request)
+    max_bytes = settings.max_update_mb * 1024 * 1024
+    data = await file.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise HTTPException(413, "Update package exceeds upload limit")
+    temp = settings.data_dir / ".imports"
+    temp.mkdir(exist_ok=True)
+    path = temp / f"update_{datetime.now().timestamp()}_{secrets.token_hex(4)}.zip"
+    path.write_bytes(data)
+    try:
+        return update_center.stage(path, file.filename or "update.zip")
+    finally:
+        path.unlink(missing_ok=True)
+
+
+@app.post("/api/update/apply")
+def update_apply(request: Request):
+    require_host(request)
+    return update_center.request_apply()
+
+
+@app.delete("/api/update/staged")
+def update_cancel(request: Request):
+    require_host(request)
+    return update_center.cancel()
+
+
+@app.post("/api/host/claim")
+def host_claim(payload: HostClaim, request: Request):
     if settings.app_mode != "server":
         return {"ok": True, "host": True, "host_claimed": True}
     if store.host_claimed():
         raise HTTPException(409, "This Cocklebur instance already has a Host. Use Host recovery on a new browser.")
-    if not settings.host_key or not hmac.compare_digest(payload.key, settings.host_key):
+    if not settings.bootstrap_key or not secrets.compare_digest(payload.key, settings.bootstrap_key):
         raise HTTPException(403, "Invalid Host bootstrap key")
-    host, access, recovery = store.claim_host(payload.display_name)
+    host, access, recovery = store.claim_host(payload.display_name, device_label_from_request(request))
     r = JSONResponse({"ok": True, "host": True, "host_claimed": True, "host_profile": host, "host_recovery_code": recovery})
     set_host_cookie(r, access)
     return r
 
 
 @app.post("/api/host/recover")
-def host_recover(payload: HostRecover):
+def host_recover(payload: HostRecover, request: Request):
     if settings.app_mode != "server":
         return {"ok": True, "host": True}
-    host, access, recovery = store.recover_host(payload.code)
+    host, access, recovery = store.recover_host(payload.code, device_label_from_request(request))
     r = JSONResponse({"ok": True, "host": True, "host_claimed": True, "host_profile": host, "host_recovery_code": recovery})
     set_host_cookie(r, access)
     return r
@@ -217,6 +283,43 @@ def host_recover(payload: HostRecover):
 def rotate_host_recovery(request: Request):
     require_host(request)
     return {"host_recovery_code": store.rotate_host_recovery()}
+
+
+@app.get("/api/host/devices")
+def host_devices(request: Request):
+    require_host(request)
+    return {"devices": store.host_devices(request.cookies.get(HOST_COOKIE))}
+
+
+@app.post("/api/host/device-link")
+def create_host_device_link(request: Request):
+    require_host(request)
+    token, expires_at = store.create_host_device_link()
+    url = f"{settings.base_url}/host-device-link?token={token}"
+    return {
+        "device_link_url": url,
+        "expires_at": expires_at,
+        "one_time": True,
+        "qr_url": f"/api/host/device-link/qr?token={token}",
+    }
+
+
+@app.get("/api/host/device-link/qr")
+def host_device_link_qr(request: Request, token: str):
+    require_host(request)
+    if not store.verify_host_device_link(token):
+        raise HTTPException(400, "Device link is no longer active")
+    url = f"{settings.base_url}/host-device-link?token={token}"
+    img = qrcode.make(url)
+    buf = io.BytesIO(); img.save(buf, format="PNG"); buf.seek(0)
+    return StreamingResponse(buf, media_type="image/png")
+
+
+@app.delete("/api/host/devices/{session_id}")
+def revoke_host_device(session_id: str, request: Request):
+    require_host(request)
+    store.revoke_host_device(session_id, request.cookies.get(HOST_COOKIE))
+    return {"ok": True}
 
 
 @app.post("/api/host/logout")
@@ -240,6 +343,34 @@ def patch_instance_permissions(project_id: str, person_id: str, payload: Instanc
         can_create_projects=payload.can_create_projects,
         can_import_projects=payload.can_import_projects,
     )
+
+
+@app.get("/host-device-link", response_class=HTMLResponse)
+def host_device_link_page(request: Request, token: str = ""):
+    valid = bool(token and store.verify_host_device_link(token))
+    return templates.TemplateResponse(request, "device_link.html", {
+        "version": __version__, "kind": "host", "token": token, "valid": valid,
+        "title": "Link this device to Instance Host",
+        "subtitle": "This adds another browser session to the existing Cocklebur Host. It does not rotate the Host recovery code.",
+        "default_label": device_label_from_request(request),
+        "action": "/host-device-link",
+        "back_url": "/",
+    })
+
+
+@app.post("/host-device-link", response_class=HTMLResponse)
+def host_device_link_exchange(request: Request, token: str = Form(...), device_label: str = Form("")):
+    try:
+        _host, access, _session = store.claim_host_device_link(token, device_label or device_label_from_request(request))
+    except PermissionError_ as exc:
+        return templates.TemplateResponse(request, "device_link.html", {
+            "version": __version__, "kind": "host", "token": "", "valid": False,
+            "title": "Link this device to Instance Host", "subtitle": str(exc),
+            "default_label": device_label_from_request(request), "action": "/host-device-link", "back_url": "/",
+        }, status_code=403)
+    r = RedirectResponse("/", status_code=303)
+    set_host_cookie(r, access)
+    return r
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -276,10 +407,40 @@ def recover_page(request: Request, project_id: str, token: str = ""):
 def recover_exchange(request: Request, project_id: str, token: str = Form(...)):
     project = store.get_project(project_id)
     try:
-        person, access = store.exchange_recovery(project_id, token)
+        person, access = store.exchange_recovery(project_id, token, device_label_from_request(request))
     except PermissionError_ as exc:
         return templates.TemplateResponse(request, "recover.html", {
             "project": project, "token": "", "version": __version__, "error": str(exc),
+        }, status_code=403)
+    r = RedirectResponse(f"/project/{project_id}", status_code=303)
+    set_access_cookie(r, project_id, access)
+    return r
+
+
+@app.get("/device-link/{project_id}", response_class=HTMLResponse)
+def device_link_page(request: Request, project_id: str, token: str = ""):
+    project = store.get_project(project_id)
+    person = store.verify_person_device_link(project_id, token) if token else None
+    return templates.TemplateResponse(request, "device_link.html", {
+        "version": __version__, "kind": "project", "token": token, "valid": bool(person),
+        "title": f"Link this device to {project.get('name', 'project')}",
+        "subtitle": (f"Continue as {person.get('display_name')} ({person.get('role')}). This is the same project identity, not a new member." if person else "This device link is invalid or expired."),
+        "default_label": device_label_from_request(request),
+        "action": f"/device-link/{project_id}",
+        "back_url": "/",
+    })
+
+
+@app.post("/device-link/{project_id}", response_class=HTMLResponse)
+def device_link_exchange(request: Request, project_id: str, token: str = Form(...), device_label: str = Form("")):
+    project = store.get_project(project_id)
+    try:
+        _person, access, _session = store.claim_person_device_link(project_id, token, device_label or device_label_from_request(request))
+    except PermissionError_ as exc:
+        return templates.TemplateResponse(request, "device_link.html", {
+            "version": __version__, "kind": "project", "token": "", "valid": False,
+            "title": f"Link this device to {project.get('name', 'project')}", "subtitle": str(exc),
+            "default_label": device_label_from_request(request), "action": f"/device-link/{project_id}", "back_url": "/",
         }, status_code=403)
     r = RedirectResponse(f"/project/{project_id}", status_code=303)
     set_access_cookie(r, project_id, access)
@@ -293,7 +454,7 @@ def owner_recover(project_id: str, payload: OwnerRecover, request: Request):
         role = str(existing.get("role") or "member").capitalize()
         name = str(existing.get("display_name") or "this user")
         raise HTTPException(409, f"This browser already has project access as {name} ({role}). Owner recovery is only for a browser with no project session.")
-    person, access, next_code = store.recover_owner_code(project_id, payload.code)
+    person, access, next_code = store.recover_owner_code(project_id, payload.code, device_label_from_request(request))
     r = JSONResponse({
         "person": {"id": person["id"], "display_name": person["display_name"], "role": person["role"]},
         "owner_recovery_code": next_code,
@@ -318,7 +479,7 @@ def create_project(payload: ProjectCreate, request: Request, response: Response)
     if settings.app_mode == "server":
         data["mode"] = "server"
         data["storage_path"] = None
-    p, owner_token, owner_recovery_code = store.create_project(data)
+    p, owner_token, owner_recovery_code = store.create_project(data, device_label_from_request(request))
     if owner_token:
         set_access_cookie(response, p["id"], owner_token)
     return {**p, "owner_recovery_code": owner_recovery_code}
@@ -346,12 +507,115 @@ async def import_project(request: Request, response: Response, file: UploadFile 
         owner_recovery_code = store.rotate_owner_recovery(project["id"], owner["id"], "system")
         result["owner_recovery_code"] = owner_recovery_code
         if project.get("mode") == "server":
-            access = store.issue_access(project["id"], owner["id"], "system")
+            access = store.issue_access(project["id"], owner["id"], "system", device_label_from_request(request))
             set_access_cookie(response, project["id"], access)
             result["owner_access_ready"] = True
         return result
     finally:
         path.unlink(missing_ok=True)
+
+
+def _exportable_project_ids(request: Request) -> list[str]:
+    if settings.app_mode == "local":
+        return [p["id"] for p in store.list_local_projects()]
+    ids: list[str] = []
+    for pid in store.list_project_ids():
+        try:
+            person = store.resolve_access(pid, request.cookies.get(cookie_name(pid)))
+        except Exception:
+            person = None
+        if person and person.get("role") in {"owner", "member"}:
+            ids.append(pid)
+    return ids
+
+
+@app.get("/api/projects/export-bundle")
+def export_workspace_bundle(request: Request):
+    ids = _exportable_project_ids(request)
+    if not ids:
+        raise HTTPException(400, "No accessible Owner/Member projects to export")
+    path, _meta = store.export_workspace_bundle(ids)
+    return FileResponse(path, filename=path.name, media_type="application/zip", background=BackgroundTask(path.unlink, missing_ok=True))
+
+
+@app.post("/api/projects/import/preflight")
+async def import_preflight(request: Request, files: list[UploadFile] = File(...)):
+    if settings.app_mode == "server":
+        require_instance_permission(request, "import")
+    if not files:
+        raise HTTPException(400, "Choose at least one project pack or Workspace Bundle")
+    imports_root = settings.data_dir / ".imports"
+    imports_root.mkdir(exist_ok=True)
+    cutoff = datetime.now().timestamp() - 24 * 60 * 60
+    for stale in imports_root.glob("batch_*"):
+        try:
+            if stale.is_dir() and stale.stat().st_mtime < cutoff:
+                shutil.rmtree(stale, ignore_errors=True)
+        except OSError:
+            pass
+    batch_id = "batch_" + secrets.token_hex(8)
+    batch_root = imports_root / batch_id
+    batch_root.mkdir(parents=True, exist_ok=False)
+    entries: list[dict[str, Any]] = []
+    try:
+        for upload_index, upload in enumerate(files):
+            data = await upload.read(settings.max_import_mb * 1024 * 1024 + 1)
+            if len(data) > settings.max_import_mb * 1024 * 1024:
+                entries.append({"item_id": f"item_{len(entries)}", "status": "Invalid pack", "detail": "Import exceeds configured limit", "source_name": upload.filename})
+                continue
+            src = batch_root / f"source_{upload_index}.zip"
+            src.write_bytes(data)
+            extract = batch_root / f"extract_{upload_index}"
+            extract.mkdir()
+            try:
+                packs = store.unpack_workspace_bundle(src, extract)
+                for pack in packs:
+                    item_id = f"item_{len(entries)}"
+                    target = batch_root / f"{item_id}.zip"
+                    shutil.copy2(pack, target)
+                    pre = store.preflight_pack(target)
+                    entries.append({**pre, "item_id": item_id, "file": target.name, "source_name": upload.filename})
+            except Exception as exc:
+                entries.append({"item_id": f"item_{len(entries)}", "status": "Invalid pack", "detail": str(exc), "source_name": upload.filename})
+        (batch_root / "batch.json").write_text(json.dumps({"batch_id": batch_id, "entries": entries}, ensure_ascii=False, indent=2), "utf-8")
+        return {"batch_id": batch_id, "entries": entries}
+    except Exception:
+        shutil.rmtree(batch_root, ignore_errors=True)
+        raise
+
+
+@app.post("/api/projects/import/commit")
+def import_commit(payload: WorkspaceImportCommit, request: Request, response: Response):
+    if settings.app_mode == "server":
+        require_instance_permission(request, "import")
+    imports_root = (settings.data_dir / ".imports").resolve()
+    batch_root = (imports_root / payload.batch_id).resolve()
+    if imports_root not in batch_root.parents or not (batch_root / "batch.json").exists():
+        raise HTTPException(404, "Import batch not found")
+    data = json.loads((batch_root / "batch.json").read_text("utf-8"))
+    results: list[dict[str, Any]] = []
+    try:
+        for entry in data.get("entries", []):
+            if entry.get("status") not in {"Ready", "Duplicate ID"}:
+                results.append({**entry, "result": "skipped"})
+                continue
+            if entry.get("status") == "Duplicate ID" and payload.duplicate_policy == "skip":
+                results.append({**entry, "result": "skipped"})
+                continue
+            pack = batch_root / entry["file"]
+            project = store.import_project(pack, allow_new_id_on_conflict=(payload.duplicate_policy == "new_id"), target_mode=settings.app_mode)
+            owners = [person for person in store.people(project["id"]) if person.get("role") == "owner"]
+            recovery = None
+            if owners:
+                owner = owners[0]
+                recovery = store.rotate_owner_recovery(project["id"], owner["id"], "system")
+                if project.get("mode") == "server":
+                    access = store.issue_access(project["id"], owner["id"], "system", device_label_from_request(request))
+                    set_access_cookie(response, project["id"], access)
+            results.append({**entry, "result": "imported", "imported_project_id": project["id"], "owner_recovery_code": recovery})
+        return {"results": results}
+    finally:
+        shutil.rmtree(batch_root, ignore_errors=True)
 
 
 @app.get("/api/projects/{project_id}")
@@ -427,8 +691,8 @@ def invite_qr(project_id: str, request: Request, token: str):
 
 
 @app.post("/api/projects/{project_id}/join")
-def join_project(project_id: str, payload: JoinRequest):
-    person, token = store.join(project_id, payload.display_name, payload.token, payload.pin)
+def join_project(project_id: str, payload: JoinRequest, request: Request):
+    person, token = store.join(project_id, payload.display_name, payload.token, payload.pin, device_label_from_request(request))
     r = JSONResponse({"person": {"id": person["id"], "display_name": person["display_name"], "role": person["role"]}})
     set_access_cookie(r, project_id, token)
     return r
@@ -462,6 +726,44 @@ def recovery_link(project_id: str, person_id: str, request: Request):
     return {"recovery_url": f"{settings.base_url}/recover/{project_id}?token={token}", "one_time": True}
 
 
+@app.get("/api/projects/{project_id}/me/devices")
+def my_devices(project_id: str, request: Request):
+    actor = require(project_id, request)
+    return {"devices": store.person_devices(project_id, actor["id"], request.cookies.get(cookie_name(project_id)))}
+
+
+@app.post("/api/projects/{project_id}/me/device-link")
+def create_my_device_link(project_id: str, request: Request):
+    actor = require(project_id, request)
+    token, expires_at = store.create_person_device_link(project_id, actor["id"])
+    url = f"{settings.base_url}/device-link/{project_id}?token={token}"
+    return {
+        "device_link_url": url,
+        "expires_at": expires_at,
+        "one_time": True,
+        "qr_url": f"/api/projects/{project_id}/me/device-link/qr?token={token}",
+    }
+
+
+@app.get("/api/projects/{project_id}/me/device-link/qr")
+def my_device_link_qr(project_id: str, request: Request, token: str):
+    actor = require(project_id, request)
+    person = store.verify_person_device_link(project_id, token)
+    if not person or person.get("id") != actor.get("id"):
+        raise HTTPException(400, "Device link is no longer active")
+    url = f"{settings.base_url}/device-link/{project_id}?token={token}"
+    img = qrcode.make(url)
+    buf = io.BytesIO(); img.save(buf, format="PNG"); buf.seek(0)
+    return StreamingResponse(buf, media_type="image/png")
+
+
+@app.delete("/api/projects/{project_id}/me/devices/{session_id}")
+def revoke_my_device(project_id: str, session_id: str, request: Request):
+    actor = require(project_id, request)
+    store.revoke_person_device(project_id, actor["id"], session_id, request.cookies.get(cookie_name(project_id)))
+    return {"ok": True}
+
+
 # Cards
 def _card_visible_to(card: dict[str, Any], actor: dict[str, Any]) -> bool:
     return (card.get("visibility") or "everyone") == "everyone" or card.get("created_by") == actor.get("id")
@@ -485,9 +787,13 @@ def cards(project_id: str, request: Request, type: str | None = None, status: st
 
 
 @app.post("/api/projects/{project_id}/cards")
-def add_card(project_id: str, payload: CardCreate, request: Request):
+def add_card(project_id: str, payload: CardCreate, request: Request, response: Response):
     actor = require(project_id, request, {"owner", "member"})
-    return store.create_card(project_id, payload.model_dump(), actor["id"])
+    key = request.headers.get("X-Idempotency-Key")
+    card, replayed = store.create_card(project_id, payload.model_dump(), actor["id"], key)
+    if replayed:
+        response.headers["X-Idempotency-Replayed"] = "true"
+    return card
 
 
 @app.get("/api/projects/{project_id}/cards/{card_id}")

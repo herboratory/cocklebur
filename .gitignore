@@ -3,12 +3,8 @@ __pycache__/
 .pytest_cache/
 *.pyc
 .env
-deploy/deploy.env
-**/secret.env
-deploy/k8s/overlays/*/.env
 data/*
 !data/.gitkeep
 dist/
 build/
 *.spec
-deploy/k8s/overlays/*/env-config.env

@@ -1,15 +1,46 @@
-# Changelog
+# 0.2.18.1 — Multi-device access + managed updates
 
-## 0.2.16 — SERVER-INSTANCE-AUTH-01
+- Added managed runtime updates: Apply, application restart, `/health` verification and automatic code rollback.
+- Kept Docker/Kubernetes privileges out of the web process; a small PID-1 supervisor only manages release slots under the persistent data volume.
+- Managed Runtime v1 rejects dependency-changing packages; those still require a rebuilt container image.
+- 0.2.17.2 and older require one final normal deployment before web-based Apply is available.
+- Added normal multi-device linking for project Owner / Member / Viewer identities without creating duplicate people.
+- Added Host device linking separate from Host recovery.
+- Added short-lived, single-use device links and QR codes.
+- Added per-device session listing and individual revocation.
+- Removed the hidden eight-session truncation; existing devices are not silently dropped as more devices are added.
+- Preserved 0.2.17.x access-hash-only sessions as legacy sessions after upgrade.
+- Clarified Invite vs Add device vs Recovery as three separate workflows.
+- Project Pack format remains 1.0.
 
-- Split instance authorization from project roles: Host vs Owner / Member / Viewer.
-- Converted `COCKLEBUR_HOST_KEY` semantics into a one-time Host bootstrap flow; added `COCKLEBUR_BOOTSTRAP_KEY` as the preferred name while keeping the old name compatible.
-- Added persistent Host recovery with rotating recovery codes and multiple valid Host browser sessions.
-- Added independent `Create projects` and `Import project packs` instance permissions for existing project identities.
-- A delegated creator becomes Owner of the project they create; a delegated importer receives Owner access to the imported project.
-- Removing an identity or deleting its source project cleans up delegated instance grants.
-- Added Host-side Instance permissions UI and clarified the Infrastructure Admin / Deployer trust boundary.
-- Project pack format remains `1.0`; instance-level auth/grants are not portable project data.
+# 0.2.17.2 — Host credential cleanup
+
+- Uses one deployment credential name only: `COCKLEBUR_BOOTSTRAP_KEY`.
+- Uses a single explicit deployment bootstrap credential with no credential-name fallback.
+- Server mode now requires an explicit `COCKLEBUR_BOOTSTRAP_KEY`; missing configuration fails startup clearly.
+- Renames the internal setting to `bootstrap_key` and the first-claim endpoint to `/api/host/claim` to match the actual lifecycle.
+- Keeps the 0.2.16/0.2.17.1 Host lifecycle: bootstrap claim → browser Host session → rotating Host recovery code.
+- Keeps break-glass `python -m app.admin reset-host --yes` and all 0.2.17 functionality.
+
+# 0.2.17.1 — Host recovery hotfix
+
+- Restores the 0.2.16 Instance Host state model (`.instance_auth.json`).
+- Restores one-time bootstrap claim, Host recovery, recovery rotation, and multi-browser Host sessions.
+- Restored `COCKLEBUR_BOOTSTRAP_KEY` as the bootstrap configuration used by this hotfix line.
+- Restores delegated instance Create / Import permissions from 0.2.16.
+- Adds `host_claimed` to `/health` and `/api/instance/access`.
+- Adds break-glass `python -m app.admin reset-host --yes`, which backs up auth state and preserves project data/grants.
+- Adds regression coverage for 0.2.16 Host state → 0.2.17.1 with cleared browser cookies.
+- Retains 0.2.17 Workspace Bundle, Note, idempotent Card save, UI spacing, and Update Center staging features.
+
+## 0.2.17 — SERVER-WORKSPACE-NOTE-UPDATE-STAGING
+
+- Added Workspace Bundle export for all Owner/Member projects accessible in the browser, plus multi-pack / Workspace Bundle import preflight and duplicate handling.
+- Added retry-safe Card create: Save disables immediately, shows `Saving…`, uses a request timeout, and retries with the same idempotency key so a delayed response cannot create duplicate Cards.
+- Added Server Note Cards with stable Card IDs, tags/content, visibility/edit access, and Active/Archived lifecycle.
+- Added spacing between Project name and Description in the New Project modal.
+- Added Host-only Update Center staging: update ZIP validation, checksum/path safety, version compatibility, pre-update data backup, staging status, and cancel. No Docker/K8s/app replacement authority is granted to the web process.
+- Project Pack format remains 1.0.
 
 ## 0.2.15-mvp — PW-MVP-01-FINAL
 
