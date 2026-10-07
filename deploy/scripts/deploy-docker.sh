@@ -70,21 +70,24 @@ CONTAINER_NAME="cocklebur-server-${ENV}"
 VOLUME_NAME="cocklebur_data_${ENV}"
 
 # -----------------------------------------------------------------------------
-# 1. 尋找並重用 .env 變數 (優先順序: overlays/<env>/.env -> 專案根目錄 .env)
+# 1. 載入應用程式環境設定檔與解析變數
+# 優先順序:
+#   Tier 1 (最高): 命令列 / 執行環境變數 (BASE_URL, POPUP_BASE_URL, DOMAIN)
+#   Tier 2: 專案根目錄應用程式環境檔 (.env) 中的 POPUP_BASE_URL
+#   Tier 3: 環境專屬 Overlay 檔 (deploy/k8s/overlays/${ENV}/.env)
+#   Tier 4: 統一部署設定檔 (deploy/deploy.env) 中的 ${ENV_UPPER}_DEFAULT_DOMAIN
 # -----------------------------------------------------------------------------
-ENV_FILE=""
-if [[ -f "${DEPLOY_DIR}/k8s/overlays/${ENV}/.env" ]]; then
-  ENV_FILE="${DEPLOY_DIR}/k8s/overlays/${ENV}/.env"
-elif [[ -f "${ROOT_DIR}/.env" ]]; then
-  ENV_FILE="${ROOT_DIR}/.env"
-fi
+CLI_BASE_URL="${BASE_URL:-${POPUP_BASE_URL:-}}"
+CLI_DOMAIN="${DOMAIN:-}"
 
 POPUP_BASE_URL=""
 COCKLEBUR_BOOTSTRAP_KEY=""
 POPUP_SECRET_KEY=""
 
-if [[ -n "$ENV_FILE" ]]; then
-  echo ">>> 偵測到應用程式環境檔: ${ENV_FILE}"
+# (1) 先讀取根目錄 .env (以根目錄 .env 之 POPUP_BASE_URL 為主)
+ROOT_ENV_FILE="${ROOT_DIR}/.env"
+if [[ -f "$ROOT_ENV_FILE" ]]; then
+  echo ">>> 偵測到根目錄應用程式環境檔: ${ROOT_ENV_FILE}"
   while IFS='=' read -r key val || [[ -n "$key" ]]; do
     key="$(echo "$key" | tr -d ' \t\r')"
     [[ -z "$key" || "$key" =~ ^# ]] && continue
@@ -98,9 +101,49 @@ if [[ -n "$ENV_FILE" ]]; then
       COCKLEBUR_BOOTSTRAP_KEY|COCKLEBUR_HOST_KEY)
         [[ -z "$COCKLEBUR_BOOTSTRAP_KEY" ]] && COCKLEBUR_BOOTSTRAP_KEY="$val"
         ;;
-      POPUP_SECRET_KEY) POPUP_SECRET_KEY="$val" ;;
+      POPUP_SECRET_KEY)
+        [[ -z "$POPUP_SECRET_KEY" ]] && POPUP_SECRET_KEY="$val"
+        ;;
     esac
-  done < "$ENV_FILE"
+  done < "$ROOT_ENV_FILE"
+fi
+
+# (2) 讀取 Overlay 專屬 .env (補充/覆蓋環境專屬金鑰；若根目錄無 BASE_URL 則作為次選)
+OVERLAY_ENV_FILE="${DEPLOY_DIR}/k8s/overlays/${ENV}/.env"
+if [[ -f "$OVERLAY_ENV_FILE" ]]; then
+  echo ">>> 偵測到環境專屬 Overlay 設定: ${OVERLAY_ENV_FILE}"
+  while IFS='=' read -r key val || [[ -n "$key" ]]; do
+    key="$(echo "$key" | tr -d ' \t\r')"
+    [[ -z "$key" || "$key" =~ ^# ]] && continue
+    val="$(echo "$val" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]\r]*$//')"
+    if [[ "$val" =~ ^\"(.*)\"$ ]] || [[ "$val" =~ ^\'(.*)\'$ ]]; then
+      val="${BASH_REMATCH[1]}"
+    fi
+
+    case "$key" in
+      COCKLEBUR_BOOTSTRAP_KEY|COCKLEBUR_HOST_KEY)
+        COCKLEBUR_BOOTSTRAP_KEY="$val"
+        ;;
+      POPUP_SECRET_KEY)
+        POPUP_SECRET_KEY="$val"
+        ;;
+      POPUP_BASE_URL)
+        [[ -z "$POPUP_BASE_URL" ]] && POPUP_BASE_URL="$val"
+        ;;
+    esac
+  done < "$OVERLAY_ENV_FILE"
+fi
+
+# (3) 若皆未設定 POPUP_BASE_URL，fallback 到 deploy.env 的預設網域
+if [[ -z "$POPUP_BASE_URL" && -n "$DEFAULT_DOMAIN" ]]; then
+  POPUP_BASE_URL="http://${DEFAULT_DOMAIN}:${HOST_PORT}"
+fi
+
+# -----------------------------------------------------------------------------
+# 2. 套用最高優先權 (CLI / Runtime 變數覆蓋) 並同步 DOMAIN 與 POPUP_BASE_URL
+# -----------------------------------------------------------------------------
+if [[ -n "$CLI_BASE_URL" ]]; then
+  POPUP_BASE_URL="$CLI_BASE_URL"
 fi
 
 # 萃取網域
@@ -108,7 +151,16 @@ PARSED_DOMAIN=""
 if [[ -n "$POPUP_BASE_URL" ]]; then
   PARSED_DOMAIN="$(python3 -c "import urllib.parse, sys; u=sys.argv[1]; p=urllib.parse.urlparse(u if '://' in u else 'https://'+u); print(p.hostname or '')" "$POPUP_BASE_URL")"
 fi
-DOMAIN="${DOMAIN:-${PARSED_DOMAIN:-$DEFAULT_DOMAIN}}"
+
+if [[ -n "$CLI_DOMAIN" ]]; then
+  DOMAIN="$CLI_DOMAIN"
+  if [[ -z "$CLI_BASE_URL" ]]; then
+    POPUP_BASE_URL="http://${DOMAIN}:${HOST_PORT}"
+  fi
+else
+  DOMAIN="${PARSED_DOMAIN:-$DEFAULT_DOMAIN}"
+fi
+
 if [[ -z "$POPUP_BASE_URL" ]]; then
   POPUP_BASE_URL="http://${DOMAIN}:${HOST_PORT}"
 fi

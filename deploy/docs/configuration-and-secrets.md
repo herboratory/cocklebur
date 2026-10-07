@@ -9,9 +9,11 @@
 為了避免在 Docker Compose、Kubernetes ConfigMap、Helm Values 以及 Ingress YAML 中重複定義相同的網域與金鑰，本專案採用 **`.env` 作為核心真實來源**。
 
 ### 1.1 設定檔優先級 (Lookup Precedence)
-部署工具尋找設定檔的順序如下：
-1. **環境專屬檔案**：`deploy/k8s/overlays/<env>/.env`（若存在則優先採用）
-2. **專案全域檔案**：專案根目錄 `.env`（預設讀取此檔案）
+部署工具解析網域與連線位址的階層優先順序如下：
+1. **Tier 1: 命令列 / 執行環境變數**：`BASE_URL` 或 `POPUP_BASE_URL`、`DOMAIN`（最高優先權，用於臨時手動覆蓋）
+2. **Tier 2: 專案根目錄環境檔**：專案根目錄 `.env` 中的 `POPUP_BASE_URL`（主要應用程式設定）
+3. **Tier 3: 環境專屬 Overlay 檔**：`deploy/k8s/overlays/<env>/.env`（補充環境專屬金鑰；若根目錄無 BASE_URL 則作為備選）
+4. **Tier 4: 統一部署設定檔**：`deploy/deploy.env` 中的 `<ENV>_DEFAULT_DOMAIN`（最後 fallback）
 
 ### 1.2 變數參考規格表
 
